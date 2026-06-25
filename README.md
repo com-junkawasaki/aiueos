@@ -304,9 +304,9 @@ defaults the build target to wasm32.)
 
 | phase | scope | status |
 |---|---|---|
-| 0 | manifests, capability graph, policy reasoner, broker, safe-check, audit, `aiueos run`, staged boot (`aiueos up`, Stage 0–4) | ✅ this crate |
-| 0+ | **runtime-enforced capabilities**: `aiueos:host` ABI + pub/sub topic bus → sensor→planner→actuator robot demo | ✅ this crate |
-| 1 | richer kotoba manifest/policy/proof system | 🔜 |
+| 0 | manifests (fail-loud validation), capability graph, policy reasoner, broker, safe-check, append-only **+ queryable** audit, staged boot (`aiueos up`, Stage 0–4) | ✅ this crate |
+| 0+ | **runtime-enforced capabilities**: `aiueos:host` ABI (log/clock/publish/poll/take/count) + pub/sub topic bus with FIFO queues; **per-topic isolation**; **periodic control loop** (`--rounds`); device binding + exclusivity; **artifact integrity** (`:aiueos/wasm-sha256`); machine-readable `--edn` surface (verify/inspect/up/run/audit) → sensor→planner→actuator robot demo | ✅ this crate |
+| 1 | richer kotoba manifest/policy/**proof** system (signed manifests / provenance) | 🔜 |
 | 2 | typed safe-kotoba compiler (effects + capabilities in the type system) | 🔜 |
 | 3 | real service components (log/kv/vfs/net-proxy) | 🔜 |
 | 4 | virtio mock drivers as components | partial (logic stub) |

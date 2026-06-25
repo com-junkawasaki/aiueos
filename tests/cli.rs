@@ -118,12 +118,17 @@ fn audit_replays_a_populated_log() {
 
 #[test]
 fn audit_filters_by_event_and_emits_edn() {
-    // Build a populated log via verify, then query it.
-    let manifest = write(
-        "filterme.edn",
+    // Use an ISOLATED dir so verify's audit log isn't shared with other tests
+    // (the negative filters below rely on the log containing only our entries).
+    let dir = std::env::temp_dir().join("aiueos-cli-auditfilter");
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = dir.join("filterme.edn");
+    std::fs::write(
+        &manifest,
         "{:aiueos/component :app/filterme :aiueos/kind :app :aiueos/imports #{:log/write}}",
-    );
-    let log = scratch(".aiueos/audit.edn");
+    )
+    .unwrap();
+    let log = dir.join(".aiueos/audit.edn");
     let _ = std::fs::remove_file(&log);
     let (_c, _o, _e) = aiueos(&["verify", manifest.to_str().unwrap()]);
 
@@ -151,6 +156,29 @@ fn audit_filters_by_event_and_emits_edn() {
     let (code, out, _e) = aiueos(&["audit", "--log", log.to_str().unwrap(), "--event", "deny"]);
     assert_eq!(code, 0);
     assert!(out.contains("no audit entries"));
+
+    // --component matches the one we ran; a different id → no matches.
+    let (code, out, _e) = aiueos(&[
+        "audit",
+        "--log",
+        log.to_str().unwrap(),
+        "--component",
+        "app/filterme",
+    ]);
+    assert_eq!(code, 0);
+    assert!(out.contains("app/filterme"));
+    let (code, out, _e) = aiueos(&[
+        "audit",
+        "--log",
+        log.to_str().unwrap(),
+        "--component",
+        "app/nobody",
+    ]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("no audit entries"),
+        "unknown component → no matches"
+    );
     let _ = std::fs::remove_file(&log);
 }
 

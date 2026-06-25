@@ -31,6 +31,31 @@ fn launch_in(dir: &Path, manifest: &str) -> aiueos::Result<i64> {
     broker().launch(&m, dir, &g)
 }
 
+// In a build without the CLJ compiler (the default/standalone config), a
+// component that needs source compilation must fail with a clear, named error —
+// not a panic, and not a silent no-op.
+#[cfg(not(feature = "kototama"))]
+#[test]
+fn source_component_without_kototama_is_a_clear_error() {
+    let dir = tmpdir();
+    std::fs::write(dir.join("src.clj"), "(defn main [n] n)").unwrap();
+    std::fs::write(
+        dir.join("srccomp.edn"),
+        r#"{:aiueos/component :app/src :aiueos/kind :app
+            :aiueos/source "src.clj" :aiueos/entry "main"}"#,
+    )
+    .unwrap();
+    match launch_in(&dir, "srccomp.edn") {
+        Err(AiueosError::Run(msg)) => {
+            assert!(
+                msg.contains("kototama"),
+                "error names the missing feature: {msg}"
+            )
+        }
+        other => panic!("expected a Run error, got {other:?}"),
+    }
+}
+
 #[test]
 fn launch_runs_a_host_importing_component_with_a_fresh_bus() {
     // The example sensor imports :topic/publish (a kernel cap) → its grant lets

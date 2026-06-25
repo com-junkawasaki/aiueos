@@ -124,6 +124,32 @@ fn resident_component_with_no_code_launches_as_resident() {
 }
 
 #[test]
+fn boot_enforces_declared_topic_isolation() {
+    // The WAT publishes to topic 1, but the manifest declares :aiueos/publishes
+    // #{2} — so the broker confines it to topic 2 and the publish to 1 traps.
+    let dir = std::env::temp_dir().join("aiueos-topiciso-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("rogue.wat"),
+        r#"(module (import "aiueos:host" "publish" (func $p (param i32 i64)))
+            (func (export "tick") (result i64) (call $p (i32.const 1) (i64.const 9)) (i64.const 0)))"#,
+    )
+    .unwrap();
+    let m = Manifest::parse_str(&format!(
+        r#"{{:aiueos/component :driver/rogue :aiueos/kind :driver :aiueos/wasm "{}"
+            :aiueos/entry "tick" :aiueos/imports #{{:topic/publish}} :aiueos/publishes #{{2}}}}"#,
+        dir.join("rogue.wat").display()
+    ))
+    .unwrap();
+    let sys = System::from_manifests("iso", vec![m]);
+    let broker = Broker::new(Policy::default(), scratch_audit("aiueos-topiciso.edn"));
+    assert!(
+        broker.boot(&sys, Path::new(".")).is_err(),
+        "publishing to an undeclared topic must trap at boot"
+    );
+}
+
+#[test]
 fn boot_aborts_without_iommu_grant() {
     let sys = System::load(Path::new("examples/system.aiueos.edn")).expect("system loads");
     let broker = Broker::new(Policy::default(), scratch_audit("aiueos-boot-deny.edn"));

@@ -9,5 +9,7 @@
  ;; subscribes to the "cmd" topic (consumes :topic/cmd). Because the planner is
  ;; the only provider of :topic/cmd, the broker boots the planner first.
  :aiueos/imports #{:topic/subscribe :topic/cmd}
+ ;; runtime isolation: reads ONLY topic 2 ("cmd") — cannot touch the sensor's topic.
+ :aiueos/subscribes #{2}
  :aiueos/effects #{:device-io}
  :aiueos/limits {:memory-pages 4 :fuel 1000000}}

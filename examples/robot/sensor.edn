@@ -7,5 +7,7 @@
  :aiueos/args [21]
  :aiueos/imports #{:topic/publish}
  :aiueos/exports #{:topic/scan}
+ ;; runtime isolation: may publish ONLY to topic 1 ("scan"), nothing else.
+ :aiueos/publishes #{1}
  :aiueos/effects #{:device-io}
  :aiueos/limits {:memory-pages 4 :fuel 1000000}}

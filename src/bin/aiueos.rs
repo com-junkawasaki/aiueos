@@ -52,7 +52,7 @@ fn print_usage() {
          USAGE:\n  \
          aiueos verify  <manifest|system>.edn [--policy p.edn] [--edn]\n  \
          aiueos inspect <system>.edn          [--policy p.edn] [--edn]\n  \
-         aiueos up      <system>.edn          [--policy p.edn]   boot the whole system\n  \
+         aiueos up      <system>.edn          [--policy p.edn] [--edn]   boot the whole system\n  \
          aiueos run     <manifest>.edn        [--policy p.edn] [--system s.edn]\n  \
          aiueos compile <source.clj|manifest> [-o out.wasm]\n  \
          aiueos check   <source.clj>\n  \
@@ -374,31 +374,57 @@ fn cmd_up(args: &[String]) -> aiueos::Result<()> {
         let sys = System::load(&path)?;
         let policy = load_policy(args)?;
         let broker = Broker::new(policy, audit_for(&path)?);
+        let edn_mode = args.iter().any(|a| a == "--edn");
 
-        println!("aiueos boot — system `{}`", sys.name);
-
-        // Stage 1–2: capability link → boot order (shown before launching).
-        let graph = sys.graph();
-        println!(
-            "  link: {} capabilities across {} components",
-            graph.all().len(),
-            sys.components.len()
-        );
-        match sys.boot_order() {
-            Ok(order) => {
-                let names: Vec<&str> = order
-                    .iter()
-                    .map(|&i| sys.components[i].id.as_str())
-                    .collect();
-                println!("  order: {}", names.join(" → "));
-            }
-            Err(cycle) => {
-                return Err(schema(&format!("dependency cycle: {}", cycle.join(" → "))));
+        if !edn_mode {
+            println!("aiueos boot — system `{}`", sys.name);
+            // Stage 1–2: capability link → boot order (shown before launching).
+            let graph = sys.graph();
+            println!(
+                "  link: {} capabilities across {} components",
+                graph.all().len(),
+                sys.components.len()
+            );
+            match sys.boot_order() {
+                Ok(order) => {
+                    let names: Vec<&str> = order
+                        .iter()
+                        .map(|&i| sys.components[i].id.as_str())
+                        .collect();
+                    println!("  order: {}", names.join(" → "));
+                }
+                Err(cycle) => {
+                    return Err(schema(&format!("dependency cycle: {}", cycle.join(" → "))));
+                }
             }
         }
 
         // Stages 3–4: verify + launch in order (audited inside the broker).
         let report = broker.boot(&sys, &base)?;
+
+        if edn_mode {
+            use kotoba_edn::EdnValue as E;
+            let launched = E::vector(report.launched.iter().map(|o| {
+                let mut f = vec![
+                    (E::kw_bare("component"), E::string(o.component.clone())),
+                    (E::kw_bare("kind"), E::kw_bare(o.kind)),
+                ];
+                match o.result {
+                    Some(r) => f.push((E::kw_bare("result"), E::int(r))),
+                    None => f.push((E::kw_bare("resident"), E::bool(true))),
+                }
+                E::map(f)
+            }));
+            println!(
+                "{}",
+                kotoba_edn::to_string(&E::map([
+                    (E::kw("aiueos", "system"), E::string(report.system.clone())),
+                    (E::kw("aiueos", "launched"), launched),
+                ]))
+            );
+            return Ok(());
+        }
+
         for o in &report.launched {
             match o.result {
                 Some(v) => println!("  ✓ {:24} ({:<8}) → {}", o.component, o.kind, v),

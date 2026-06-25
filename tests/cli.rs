@@ -268,6 +268,19 @@ fn up_boots_the_robot_system() {
 
 #[cfg(feature = "wasm-runtime")]
 #[test]
+fn up_edn_emits_machine_readable_boot_report() {
+    let (code, out, _e) = aiueos(&["up", "examples/robot/robot.aiueos.edn", "--edn"]);
+    assert_eq!(code, 0);
+    let v = kotoba_edn::parse(out.trim()).expect("boot report is valid EDN");
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "system").and_then(|x| x.as_string()),
+        Some("robot")
+    );
+    assert!(aiueos::edn::get(&v, "aiueos", "launched").is_some());
+}
+
+#[cfg(feature = "wasm-runtime")]
+#[test]
 fn run_a_host_importing_component() {
     let (code, out, _e) = aiueos(&[
         "run",

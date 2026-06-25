@@ -1,0 +1,36 @@
+[package]
+name = "aiueos"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "aiueos — Kotoba-defined, Kototama-executed, capability-secure WebAssembly OS substrate. Phase-0 MVP: component manifests + capability graph + policy reasoner + capability broker + safe-kotoba checker + audit log + a wasmtime component runner driven by the kototama CLJ→wasm compiler."
+
+[[bin]]
+name = "aiueos"
+path = "src/bin/aiueos.rs"
+
+[dependencies]
+# Manifests, policy, device schemas, audit log — everything is "kotoba" (EDN).
+kotoba-edn = { path = "../kotoba/crates/kotoba-edn" }
+# CLJ/Kotoba subset → wasm. Optional so the manifest/policy/graph core compiles
+# with zero heavy deps.
+kototama = { path = "../kototama", features = ["run"], optional = true }
+# Execution engine — the broker enforces fuel + memory-page limits here. Version
+# pinned to kotoba's workspace (22) so the build is shared, not duplicated.
+wasmtime = { version = "22", optional = true }
+# Host-function trap errors (wasmtime's error type). Already in the wasmtime tree.
+anyhow = { version = "1", optional = true }
+
+[features]
+# The semantic core — manifest, capability graph, policy reasoner, broker,
+# safe-subset checker, audit, topic bus — needs no heavy deps and is always built.
+#
+# `wasm-runtime` adds *execution*: instantiate wasm (binary or WAT) under fuel +
+# memory limits with the broker-mediated `aiue:host` ABI. Needs only wasmtime.
+#
+# `kototama` adds *compilation* of CLJ/Kotoba source → wasm (pulls the kototama
+# toolchain) and implies `wasm-runtime` to run the result. Split out so the host
+# ABI / WAT components build and test without the CLJ compiler.
+default = ["wasm-runtime", "kototama"]
+wasm-runtime = ["dep:wasmtime", "dep:anyhow"]
+kototama = ["dep:kototama", "wasm-runtime"]

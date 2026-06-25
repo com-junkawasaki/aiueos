@@ -259,11 +259,22 @@ $BIN up examples/robot/robot.aiueos.edn --rounds 10   # 10 control cycles
 The planner is an `:agent` (AI-generated trust): it may use the topic bus, but
 the default policy still forbids it network/secrets/persistent-write. The
 actuator imports only `topic/subscribe`, so a `publish` call from it would trap —
-the actuator structurally *cannot* command the bus, only read it. This is the
+the actuator structurally *cannot* command the bus, only read it.
+
+Isolation reaches **individual topics**: a manifest declares the topic ids it may
+touch, and the broker confines it to those — a publish/read to any other topic
+traps even with the coarse `topic/*` capability:
+
+```edn
+{:aiueos/component :driver/sensor ... :aiueos/publishes #{1}}    ; can only publish to "scan"
+{:aiueos/component :driver/actuator ... :aiueos/subscribes #{2}} ; can only read "cmd"
+```
+
+So a compromised sensor cannot reach the actuator's command topic. This is the
 robot-OS payoff of the capability model: "the vision node cannot drive the
 motors" is enforced by the runtime, not by convention. (Real device drivers,
-named topics, and a real-time scheduler are later phases; today the nodes are
-WAT/compute and topics are numeric.)
+named topics wired into the graph, and a real-time scheduler are later phases;
+today the nodes are WAT/compute and topics are numeric ids.)
 
 ## Build & test
 

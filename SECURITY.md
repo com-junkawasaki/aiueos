@@ -31,6 +31,11 @@ explicit grant, and that whatever does happen is **audited**.
    claim — the `aiueos:host` ABI checks the conferred set on **every host call**.
    A call to an ungranted capability *traps*; holding some capabilities never
    leaks the ones you weren't given (capability attenuation is tested).
+   Enforcement reaches **individual data channels**: a manifest declares the
+   topic ids it may publish to / read (`:aiueos/publishes` / `:aiueos/subscribes`),
+   and a publish/read to an undeclared topic traps even with the coarse
+   `topic/*` capability held — so a compromised sensor cannot command the
+   actuator's topic.
 3. **Small TCB.** Only the broker, the wasm runtime/host ABI, the safe-subset
    checker and the manifest reader are trusted. Apps, services, drivers and
    agents live *outside* the TCB. Drivers are Wasm components precisely so they
@@ -81,9 +86,11 @@ refuses to provide what that surface shouldn't.
 - **Lowest-level drivers.** Real MMIO/DMA/IRQ adapters (Phase 7) will contain
   small `unsafe` code; that code, once written, is part of the TCB and must be
   audited as such.
-- **The topic bus is in-process.** Cross-machine messaging, authentication of
-  publishers, and per-topic capabilities (`topic/scan` vs `topic/cmd`) are not
-  implemented; today topics are numeric and trust the in-process broker.
+- **The topic bus is in-process.** Per-topic *isolation* by id-set is enforced
+  (a node can only touch the topics it declared), but **cross-machine messaging**
+  and **publisher authentication** are not — within one process the bus trusts
+  the broker, and topics are still numeric ids rather than named, graph-wired
+  capabilities.
 - **No confidentiality/crypto** of audit logs or component state at rest.
 
 If a deployment needs any of the above, it must add it above aiueos — the design

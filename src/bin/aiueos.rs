@@ -60,6 +60,9 @@ fn print_usage() {
     );
 }
 
+/// Flags that consume the following argument as their value.
+const VALUE_FLAGS: &[&str] = &["--policy", "--system", "--log", "-o", "--out"];
+
 /// Tiny flag reader: pull `--name <value>` (or `-o <value>`) out of args.
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter()
@@ -67,8 +70,21 @@ fn flag(args: &[String], name: &str) -> Option<String> {
         .and_then(|i| args.get(i + 1).cloned())
 }
 
+/// First positional argument, skipping flags *and* the values they consume — so
+/// `verify --policy p.edn sys.edn` returns `sys.edn`, not the policy file.
 fn positional(args: &[String]) -> Option<&String> {
-    args.iter().find(|a| !a.starts_with('-'))
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if VALUE_FLAGS.contains(&a.as_str()) {
+            i += 2; // skip the flag and its value
+        } else if a.starts_with('-') {
+            i += 1; // a boolean flag like --edn
+        } else {
+            return Some(a);
+        }
+    }
+    None
 }
 
 fn load_policy(args: &[String]) -> aiueos::Result<Policy> {

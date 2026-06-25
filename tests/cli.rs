@@ -144,6 +144,22 @@ fn verify_unresolved_import_is_denied() {
 }
 
 #[test]
+fn verify_accepts_flags_before_the_path() {
+    // `--policy <val>` before the target must not be mistaken for the target.
+    let (code, out, _e) = aiueos(&[
+        "verify",
+        "--policy",
+        "examples/policy/default.edn",
+        "examples/system.aiueos.edn",
+    ]);
+    assert_eq!(
+        code, 0,
+        "policy-before-path applies the policy to the system"
+    );
+    assert!(out.contains("verified"));
+}
+
+#[test]
 fn verify_edn_emits_machine_readable_verdict() {
     // pass: with the IOMMU policy → verified true, output is valid EDN.
     let (code, out, _e) = aiueos(&[

@@ -36,6 +36,15 @@ const POLL_THEN_PUBLISH: &str = r#"(module
     (call $publish (i32.const 2) (local.get $v))
     (local.get $v)))"#;
 
+// publishes 10 then 20 to topic 1, returns count(1) → 2.
+const PUBLISH_TWICE_COUNT: &str = r#"(module
+  (import "aiueos:host" "publish" (func $pub (param i32 i64)))
+  (import "aiueos:host" "count"   (func $cnt (param i32) (result i64)))
+  (func (export "run") (result i64)
+    (call $pub (i32.const 1) (i64.const 10))
+    (call $pub (i32.const 1) (i64.const 20))
+    (call $cnt (i32.const 1))))"#;
+
 fn caps(items: &[&str]) -> BTreeSet<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
@@ -81,6 +90,25 @@ fn host_calls_are_counted() {
     let o = run(LOG_TWICE, &[10], &caps(&["log/write"])).expect("two logs granted");
     assert_eq!(o.logs, vec![10, 11]);
     assert_eq!(o.host_calls, 2, "both host calls counted");
+}
+
+#[test]
+fn count_reports_publish_count_and_needs_subscribe() {
+    // publish twice then count → 2; needs both publish (to publish) and
+    // subscribe (to count).
+    let o = run(
+        PUBLISH_TWICE_COUNT,
+        &[],
+        &caps(&["topic/publish", "topic/subscribe"]),
+    )
+    .expect("granted");
+    assert_eq!(o.result, 2);
+
+    // count without topic/subscribe traps (only publish granted).
+    assert!(
+        run(PUBLISH_TWICE_COUNT, &[], &caps(&["topic/publish"])).is_err(),
+        "count without topic/subscribe must trap"
+    );
 }
 
 #[test]

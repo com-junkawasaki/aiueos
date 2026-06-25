@@ -216,6 +216,29 @@ already declared so policy can gate DMA today.
  :aiueos/limits {:memory-pages 32 :fuel 10000000}}
 ```
 
+### Manifest reference (`:aiueos/*`)
+
+Every recognized key — anything else in the `:aiueos/` namespace is rejected.
+
+| key | meaning |
+|---|---|
+| `:aiueos/component` | canonical id, e.g. `:driver/virtio-blk` (required) |
+| `:aiueos/kind` | `:app` `:service` `:driver` `:broker` `:agent` `:kernel-extension` `:compat` (required) |
+| `:aiueos/trust` | `:trusted` `:verified` `:untrusted` `:ai-generated` (defaults by kind) |
+| `:aiueos/source` | CLJ/Kotoba source path (compiled by kototama; monorepo feature) |
+| `:aiueos/wasm` | precompiled `.wasm` / `.wat` path (alternative to source) |
+| `:aiueos/wasm-sha256` | expected hex SHA-256 of the artifact — mismatch is rejected |
+| `:aiueos/imports` | capabilities needed (must resolve to a provider/kernel/grant) |
+| `:aiueos/exports` | capabilities provided to others |
+| `:aiueos/effects` | side effects (`:dma` `:network` `:device-io` …) — gated by trust/DMA rules |
+| `:aiueos/requires` | hardware/runtime requirements (e.g. `:iommu`) |
+| `:aiueos/limits` | `{:memory-pages 1..65536 :fuel ≥1}` |
+| `:aiueos/entry` | exported wasm fn to call (default `"main"`) |
+| `:aiueos/args` | i64 arguments to the entry |
+| `:aiueos/device` | driver device binding `{:bus :vendor :device …}` (exclusive) |
+| `:aiueos/publishes` | topic ids this component may publish to (per-topic isolation) |
+| `:aiueos/subscribes` | topic ids this component may read |
+
 ## Robotics: capabilities you actually *call* at run time
 
 Capabilities aren't just a static manifest claim — the broker-mediated

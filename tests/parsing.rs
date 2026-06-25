@@ -94,17 +94,22 @@ fn manifest_rejects_unknown_aiueos_key() {
 
 #[test]
 fn manifest_accepts_all_known_keys() {
+    // Every recognized :aiueos/* key — keep in sync with MANIFEST_KEYS so a new
+    // key can't be added without an acceptance test.
     let m = Manifest::parse_str(
         r#"{:aiueos/component :driver/full :aiueos/kind :driver :aiueos/trust :untrusted
-            :aiueos/source "x.clj" :aiueos/wasm "x.wasm"
+            :aiueos/source "x.clj" :aiueos/wasm "x.wasm" :aiueos/wasm-sha256 "abc"
             :aiueos/imports #{:dma/map} :aiueos/exports #{:block/read}
             :aiueos/effects #{:dma} :aiueos/requires #{:iommu}
             :aiueos/limits {:memory-pages 8 :fuel 99} :aiueos/entry "go" :aiueos/args [1 2]
-            :aiueos/device {:bus :pci}}"#,
+            :aiueos/device {:bus :pci} :aiueos/publishes #{1} :aiueos/subscribes #{2}}"#,
     )
     .expect("all recognized keys parse");
     assert_eq!(m.id, "driver/full");
     assert_eq!(m.args, vec![1, 2]);
+    assert_eq!(m.wasm_sha256.as_deref(), Some("abc"));
+    assert!(m.publishes.unwrap().contains(&1));
+    assert!(m.subscribes.unwrap().contains(&2));
 }
 
 #[test]

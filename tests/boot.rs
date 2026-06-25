@@ -105,6 +105,39 @@ fn boot_rounds_threads_one_bus_across_rounds() {
 }
 
 #[test]
+fn clock_advances_across_rounds() {
+    // clock() returns the control-loop cycle, so across 3 rounds it reads 0,1,2.
+    let dir = std::env::temp_dir().join("aiueos-clock-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("clk.wat"),
+        r#"(module (import "aiueos:host" "clock" (func $c (result i64)))
+            (func (export "tick") (result i64) (call $c)))"#,
+    )
+    .unwrap();
+    let m = Manifest::parse_str(&format!(
+        r#"{{:aiueos/component :driver/clk :aiueos/kind :driver :aiueos/wasm "{}"
+            :aiueos/entry "tick" :aiueos/imports #{{:clock/monotonic}}}}"#,
+        dir.join("clk.wat").display()
+    ))
+    .unwrap();
+    let sys = System::from_manifests("clock", vec![m]);
+    let broker = Broker::new(Policy::default(), scratch_audit("aiueos-clock.edn"));
+    let reports = broker
+        .boot_rounds(&sys, Path::new("."), 3)
+        .expect("3 rounds");
+    let ticks: Vec<i64> = reports
+        .iter()
+        .map(|r| r.launched[0].result.unwrap())
+        .collect();
+    assert_eq!(
+        ticks,
+        vec![0, 1, 2],
+        "clock() reflects the control-loop cycle"
+    );
+}
+
+#[test]
 fn resident_component_with_no_code_launches_as_resident() {
     // A pure manifest (no :aiueos/source / :aiueos/wasm) passes the gate but has
     // nothing to execute — it boots as a resident with no result.

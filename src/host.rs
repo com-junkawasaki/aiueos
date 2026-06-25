@@ -147,8 +147,9 @@ pub fn run_with_host_restricted(
             "clock",
             |mut c: Caller<'_, HostCtx>| -> anyhow::Result<i64> {
                 gate(c.data(), "clock/monotonic", "clock")?;
+                let tick = c.data().bus.tick() as i64;
                 c.data_mut().calls += 1;
-                Ok(0) // Phase-0 deterministic monotonic stub.
+                Ok(tick) // monotonic control-loop cycle (Phase-0 clock stand-in)
             },
         )
         .map_err(run_err)?;

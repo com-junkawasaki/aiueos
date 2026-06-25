@@ -22,6 +22,10 @@ pub struct TopicBus {
     /// Unread samples per topic, oldest-first — drained by `take` so a consumer
     /// never misses a reading (where `latest` would coalesce to the newest).
     queues: BTreeMap<TopicId, VecDeque<i64>>,
+    /// Monotonic control-loop cycle counter (the broker advances it once per
+    /// `--rounds` round). `clock()` reads it, so a component can tell which cycle
+    /// it is in. Phase-0 stand-in for a real monotonic clock.
+    tick: u64,
 }
 
 impl TopicBus {
@@ -55,6 +59,16 @@ impl TopicBus {
     /// How many times `topic` has been published to.
     pub fn count(&self, topic: TopicId) -> u64 {
         self.counts.get(&topic).copied().unwrap_or(0)
+    }
+
+    /// The current control-loop cycle (what `clock()` returns).
+    pub fn tick(&self) -> u64 {
+        self.tick
+    }
+
+    /// Advance the cycle counter — the broker calls this once per round.
+    pub fn advance(&mut self) {
+        self.tick += 1;
     }
 
     /// Topics that currently hold a value.
@@ -97,6 +111,15 @@ mod tests {
             3,
             "count is total published, not affected by take"
         );
+    }
+
+    #[test]
+    fn tick_advances() {
+        let mut bus = TopicBus::new();
+        assert_eq!(bus.tick(), 0);
+        bus.advance();
+        bus.advance();
+        assert_eq!(bus.tick(), 2);
     }
 
     #[test]

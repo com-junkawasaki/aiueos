@@ -175,6 +175,8 @@ impl Broker {
                 system: system.name.clone(),
                 launched,
             });
+            // Next round is the next control-loop cycle: clock() advances.
+            bus.advance();
         }
         Ok(reports)
     }

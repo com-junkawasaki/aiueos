@@ -10,6 +10,15 @@ use crate::host;
 use crate::topic::TopicBus;
 use std::collections::BTreeSet;
 
+/// Lowercase-hex SHA-256 of `bytes` — used to verify a component's `:aiueos/wasm`
+/// artifact matches its declared `:aiueos/wasm-sha256` (tamper detection).
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Compile general CLJ/Kotoba source to a wasm module via kototama. Available
 /// only with the `kototama` feature; WAT/precompiled components don't need it.
 #[cfg(feature = "kototama")]

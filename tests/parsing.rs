@@ -190,6 +190,16 @@ fn manifest_rejects_empty_entry() {
 }
 
 #[test]
+fn manifest_parses_wasm_sha256() {
+    let m = Manifest::parse_str(
+        r#"{:aiueos/component :app/x :aiueos/kind :app
+            :aiueos/wasm "x.wasm" :aiueos/wasm-sha256 "abc123"}"#,
+    )
+    .unwrap();
+    assert_eq!(m.wasm_sha256.as_deref(), Some("abc123"));
+}
+
+#[test]
 fn manifest_without_device_has_none() {
     let m = Manifest::parse_str("{:aiueos/component :app/x :aiueos/kind :app}").unwrap();
     assert!(m.device.is_none());

@@ -181,7 +181,25 @@ impl Broker {
         // or load precompiled bytes / WAT text (`:aiueos/wasm`).
         let wasm: Vec<u8> = match (&m.source, &m.wasm) {
             (Some(src_rel), _) => self.compile_component_source(m, base, src_rel)?,
-            (None, Some(wasm_rel)) => std::fs::read(base.join(wasm_rel))?,
+            (None, Some(wasm_rel)) => {
+                let bytes = std::fs::read(base.join(wasm_rel))?;
+                if let Some(expected) = &m.wasm_sha256 {
+                    let actual = crate::runtime::sha256_hex(&bytes);
+                    if !actual.eq_ignore_ascii_case(expected) {
+                        self.audit.append(
+                            Event::Reject,
+                            &m.id,
+                            &format!("wasm sha256 mismatch: {wasm_rel}"),
+                        )?;
+                        return Err(AiueosError::Run(format!(
+                            "{}: :aiueos/wasm-sha256 mismatch for {wasm_rel} \
+                             (expected {expected}, got {actual})",
+                            m.id
+                        )));
+                    }
+                }
+                bytes
+            }
             (None, None) => {
                 return Err(AiueosError::Schema(format!(
                     "{}: needs :aiueos/source or :aiueos/wasm to run",

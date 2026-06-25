@@ -69,9 +69,12 @@ refuses to provide what that surface shouldn't.
 - **The TCB itself.** A bug in wasmtime, the host adapters, or the broker is
   game over. The TCB is small by design, but it is trusted, not verified — there
   is no formal proof yet.
-- **Unsigned manifests/components.** Phase-0 has no signature/provenance
-  verification. Manifest authenticity and supply-chain integrity (signing, CIDs,
-  reproducible builds) are planned, not present.
+- **Manifest authenticity (signing).** A component's `:aiueos/wasm` artifact can
+  declare `:aiueos/wasm-sha256`, and the broker rejects the component if the
+  loaded bytes don't match — **integrity / tamper detection** for the artifact.
+  But manifests themselves are still **unsigned**: this proves the bytes match
+  the hash, not *who* authored them. Signatures, provenance, and CID-addressed
+  supply-chain integrity are planned, not present.
 - **Wall-clock / IO DoS.** Fuel bounds CPU instructions and the page cap bounds
   memory, but a component can still issue many host calls; rate/quota limits on
   IO and a real-time scheduler are future work.

@@ -26,6 +26,8 @@ kotoba-edn = { git = "https://github.com/com-junkawasaki/kotoba", branch = "main
 wasmtime = { version = "22", optional = true }
 # Host-function trap errors (wasmtime's error type). Already in the wasmtime tree.
 anyhow = { version = "1", optional = true }
+# wasm artifact integrity (:aiueos/wasm-sha256 tamper check). Tiny, pure-Rust.
+sha2 = { version = "0.10", optional = true }
 
 [features]
 # The semantic core — manifest, capability graph, policy reasoner, broker,
@@ -40,7 +42,7 @@ anyhow = { version = "1", optional = true }
 # Default = execute wasm (binary/WAT). The CLJ compiler (`kototama`) is opt-in
 # because it only resolves inside the monorepo (path dep with sibling path deps).
 default = ["wasm-runtime"]
-wasm-runtime = ["dep:wasmtime", "dep:anyhow"]
+wasm-runtime = ["dep:wasmtime", "dep:anyhow", "dep:sha2"]
 # Dormant: declared so cfg gates are known, but adds no dependency (see note above).
 # Enabling it without the kototama crate present is unsupported (monorepo-only).
 kototama = ["wasm-runtime"]

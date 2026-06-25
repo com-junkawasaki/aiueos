@@ -94,6 +94,37 @@ fn launch_traps_host_call_without_the_imported_capability() {
 }
 
 #[test]
+fn wasm_sha256_matches_runs_and_mismatch_is_rejected() {
+    let dir = tmpdir();
+    let wat = br#"(module (func (export "main") (result i64) (i64.const 7)))"#;
+    std::fs::write(dir.join("m.wat"), wat).unwrap();
+    let good = aiueos::runtime::sha256_hex(wat);
+
+    // correct hash → runs
+    std::fs::write(
+        dir.join("good.edn"),
+        format!(
+            r#"{{:aiueos/component :app/g :aiueos/kind :app
+                :aiueos/wasm "m.wat" :aiueos/entry "main" :aiueos/wasm-sha256 "{good}"}}"#
+        ),
+    )
+    .unwrap();
+    assert_eq!(launch_in(&dir, "good.edn").unwrap(), 7);
+
+    // wrong hash → rejected (tamper detection)
+    std::fs::write(
+        dir.join("bad.edn"),
+        r#"{:aiueos/component :app/b :aiueos/kind :app
+            :aiueos/wasm "m.wat" :aiueos/entry "main" :aiueos/wasm-sha256 "deadbeef"}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        launch_in(&dir, "bad.edn"),
+        Err(AiueosError::Run(_))
+    ));
+}
+
+#[test]
 fn malformed_wasm_is_a_clean_run_error() {
     let dir = tmpdir();
     std::fs::write(dir.join("garbage.wat"), "this is not wasm or wat (((").unwrap();

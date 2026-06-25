@@ -24,6 +24,7 @@ const MANIFEST_KEYS: &[&str] = &[
     "entry",
     "args",
     "device",
+    "wasm-sha256",
 ];
 
 /// The kind of a component. This drives default policy and how the runtime
@@ -173,6 +174,9 @@ pub struct Manifest {
     pub source: Option<String>,
     /// Path to a precompiled `.wasm` (alternative to `source`).
     pub wasm: Option<String>,
+    /// Expected lowercase-hex SHA-256 of the `:aiueos/wasm` artifact. When set,
+    /// the broker rejects the component if the loaded bytes don't match.
+    pub wasm_sha256: Option<String>,
     /// Capabilities this component needs from others / the kernel.
     pub imports: Vec<String>,
     /// Capabilities this component provides to others.
@@ -296,6 +300,7 @@ impl Manifest {
             trust,
             source: edn::get_str(v, "aiueos", "source"),
             wasm: edn::get_str(v, "aiueos", "wasm"),
+            wasm_sha256: edn::get_str(v, "aiueos", "wasm-sha256"),
             imports: edn::kw_collection(edn::get(v, "aiueos", "imports")),
             exports: edn::kw_collection(edn::get(v, "aiueos", "exports")),
             effects: edn::kw_collection(edn::get(v, "aiueos", "effects")),

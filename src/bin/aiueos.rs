@@ -1,7 +1,7 @@
 //! `aiueos` — the Phase-0 aiueos command line.
 //!
 //!   aiueos verify  <manifest|system>.edn [--policy p.edn] [--edn]   capability + policy check
-//!   aiueos inspect <system>.edn          [--policy p.edn]   print the capability graph
+//!   aiueos inspect <system>.edn          [--policy p.edn] [--edn]   print the capability graph
 //!   aiueos run     <manifest>.edn        [--policy p.edn] [--system s.edn]
 //!   aiueos compile <source.clj|manifest> [-o out.wasm]      CLJ/Kotoba → wasm
 //!   aiueos check   <source.clj>                             safe-kotoba subset gate
@@ -51,7 +51,7 @@ fn print_usage() {
         "aiueos — capability-secure wasm component OS (Phase-0)\n\n\
          USAGE:\n  \
          aiueos verify  <manifest|system>.edn [--policy p.edn] [--edn]\n  \
-         aiueos inspect <system>.edn          [--policy p.edn]\n  \
+         aiueos inspect <system>.edn          [--policy p.edn] [--edn]\n  \
          aiueos up      <system>.edn          [--policy p.edn]   boot the whole system\n  \
          aiueos run     <manifest>.edn        [--policy p.edn] [--system s.edn]\n  \
          aiueos compile <source.clj|manifest> [-o out.wasm]\n  \
@@ -185,6 +185,11 @@ fn cmd_inspect(args: &[String]) -> aiueos::Result<()> {
     let graph = sys.graph();
     let policy = load_policy(args)?;
 
+    if args.iter().any(|a| a == "--edn") {
+        println!("{}", inspect_edn(&sys, &graph, &policy));
+        return Ok(());
+    }
+
     println!("system: {}", sys.name);
     println!("\ncomponents ({}):", sys.components.len());
     for c in &sys.components {
@@ -232,6 +237,77 @@ fn cmd_inspect(args: &[String]) -> aiueos::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Machine-readable system snapshot: components, the capability graph, and the
+/// per-component policy verdicts — all as EDN.
+fn inspect_edn(sys: &System, graph: &CapabilityGraph, policy: &Policy) -> String {
+    use kotoba_edn::EdnValue as E;
+    let strset = |xs: &[String]| E::set(xs.iter().map(|s| E::string(s.clone())));
+
+    let components = E::vector(sys.components.iter().map(|c| {
+        let mut fields = vec![
+            (E::kw_bare("id"), E::string(c.id.clone())),
+            (E::kw_bare("kind"), E::kw_bare(c.kind.label())),
+            (E::kw_bare("trust"), E::kw_bare(c.trust.label())),
+            (E::kw_bare("imports"), strset(&c.imports)),
+            (E::kw_bare("exports"), strset(&c.exports)),
+            (E::kw_bare("effects"), strset(&c.effects)),
+        ];
+        if let Some(d) = &c.device {
+            let dev = E::map(
+                [
+                    ("bus", &d.bus),
+                    ("vendor", &d.vendor),
+                    ("device", &d.device),
+                ]
+                .into_iter()
+                .filter_map(|(k, v)| v.as_ref().map(|s| (E::kw_bare(k), E::string(s.clone())))),
+            );
+            fields.push((E::kw_bare("device"), dev));
+        }
+        E::map(fields)
+    }));
+
+    let graph_edn = E::map(
+        graph
+            .all()
+            .iter()
+            .map(|(cap, ps)| (E::string(cap.clone()), strset(ps))),
+    );
+
+    let verdicts = E::vector(sys.components.iter().map(|c| {
+        match policy::verify_component(c, graph, policy) {
+            Ok(g) => E::map([
+                (E::kw_bare("component"), E::string(c.id.clone())),
+                (E::kw_bare("verified"), E::bool(true)),
+                (
+                    E::kw_bare("caps"),
+                    E::set(g.capabilities.iter().map(|s| E::string(s.clone()))),
+                ),
+            ]),
+            Err(vs) => E::map([
+                (E::kw_bare("component"), E::string(c.id.clone())),
+                (E::kw_bare("verified"), E::bool(false)),
+                (
+                    E::kw_bare("violations"),
+                    E::vector(vs.iter().map(|v| {
+                        E::map([
+                            (E::kw_bare("kind"), E::kw_bare(v.kind.label())),
+                            (E::kw_bare("message"), E::string(v.message.clone())),
+                        ])
+                    })),
+                ),
+            ]),
+        }
+    }));
+
+    kotoba_edn::to_string(&E::map([
+        (E::kw("aiueos", "system"), E::string(sys.name.clone())),
+        (E::kw("aiueos", "components"), components),
+        (E::kw("aiueos", "graph"), graph_edn),
+        (E::kw("aiueos", "verdicts"), verdicts),
+    ]))
 }
 
 fn cmd_run(args: &[String]) -> aiueos::Result<()> {

@@ -211,6 +211,18 @@ fn inspect_empty_graph_reports_no_capabilities() {
 }
 
 #[test]
+fn inspect_edn_emits_structured_snapshot() {
+    let (code, out, _e) = aiueos(&["inspect", "examples/system.aiueos.edn", "--edn"]);
+    assert_eq!(code, 0);
+    let v = kotoba_edn::parse(out.trim()).expect("snapshot is valid EDN");
+    // top-level shape: system + components + graph + verdicts
+    assert!(aiueos::edn::get(&v, "aiueos", "system").is_some());
+    assert!(aiueos::edn::get(&v, "aiueos", "components").is_some());
+    assert!(aiueos::edn::get(&v, "aiueos", "graph").is_some());
+    assert!(aiueos::edn::get(&v, "aiueos", "verdicts").is_some());
+}
+
+#[test]
 fn inspect_renders_policy_violations() {
     // No --policy → default policy grants no IOMMU → the driver's DMA is denied.
     // inspect reports (it doesn't gate), so it still exits 0 but shows the ✗ line.

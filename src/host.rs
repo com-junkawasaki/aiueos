@@ -29,11 +29,32 @@ use wasmtime::{
 /// Returned by `poll` when a topic has never been published to.
 pub const EMPTY: i64 = i64::MIN;
 
+/// Per-topic access restriction. `None` means unrestricted (any topic id);
+/// `Some(set)` restricts to exactly those topic ids — so a component can only
+/// publish to / read the topics it declared, not another node's topics.
+#[derive(Debug, Clone, Default)]
+pub struct TopicAccess {
+    pub publish: Option<BTreeSet<i32>>,
+    pub subscribe: Option<BTreeSet<i32>>,
+}
+
+impl TopicAccess {
+    /// No per-topic restriction (only the coarse capability gate applies).
+    pub fn unrestricted() -> Self {
+        Self::default()
+    }
+}
+
+fn topic_ok(set: &Option<BTreeSet<i32>>, topic: i32) -> bool {
+    set.as_ref().map_or(true, |s| s.contains(&topic))
+}
+
 /// The store context every host call sees: the conferred capabilities (the gate),
-/// the topic bus, and call/log accounting.
+/// the topic bus, the per-topic restriction, and call/log accounting.
 pub struct HostCtx {
     limits: StoreLimits,
     caps: BTreeSet<String>,
+    topics: TopicAccess,
     bus: TopicBus,
     logs: Vec<i64>,
     calls: usize,
@@ -64,7 +85,7 @@ fn gate(ctx: &HostCtx, cap: &str, what: &str) -> anyhow::Result<()> {
 /// Instantiate `wasm` (binary or WAT text) with the `aiueos:host` ABI bound, run
 /// `entry(args)` under fuel + memory limits with `caps` gating every host call,
 /// threading `bus` through. A denied host call traps and surfaces as
-/// [`AiueosError::Run`].
+/// [`AiueosError::Run`]. No per-topic restriction — see [`run_with_host_restricted`].
 pub fn run_with_host(
     wasm: &[u8],
     entry: &str,
@@ -73,6 +94,32 @@ pub fn run_with_host(
     memory_pages: u32,
     caps: &BTreeSet<String>,
     bus: TopicBus,
+) -> Result<HostOutcome> {
+    run_with_host_restricted(
+        wasm,
+        entry,
+        args,
+        fuel,
+        memory_pages,
+        caps,
+        bus,
+        &TopicAccess::unrestricted(),
+    )
+}
+
+/// Like [`run_with_host`], but additionally restricts which topic ids the
+/// component may publish to / read, per `topics`. A publish/poll/take/count to a
+/// topic outside the declared set traps even when the coarse capability is held.
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_host_restricted(
+    wasm: &[u8],
+    entry: &str,
+    args: &[i64],
+    fuel: u64,
+    memory_pages: u32,
+    caps: &BTreeSet<String>,
+    bus: TopicBus,
+    topics: &TopicAccess,
 ) -> Result<HostOutcome> {
     let mut config = Config::new();
     config.consume_fuel(true);
@@ -111,6 +158,9 @@ pub fn run_with_host(
             "publish",
             |mut c: Caller<'_, HostCtx>, topic: i32, value: i64| -> anyhow::Result<()> {
                 gate(c.data(), "topic/publish", "publish")?;
+                if !topic_ok(&c.data().topics.publish, topic) {
+                    anyhow::bail!("topic {topic} not in this component's :aiueos/publishes set");
+                }
                 let d = c.data_mut();
                 d.bus.publish(topic, value);
                 d.calls += 1;
@@ -124,6 +174,9 @@ pub fn run_with_host(
             "poll",
             |mut c: Caller<'_, HostCtx>, topic: i32| -> anyhow::Result<i64> {
                 gate(c.data(), "topic/subscribe", "poll")?;
+                if !topic_ok(&c.data().topics.subscribe, topic) {
+                    anyhow::bail!("topic {topic} not in this component's :aiueos/subscribes set");
+                }
                 let v = c.data().bus.latest(topic).unwrap_or(EMPTY);
                 c.data_mut().calls += 1;
                 Ok(v)
@@ -138,6 +191,9 @@ pub fn run_with_host(
                 // how many samples have been published to `topic` — lets a
                 // consumer notice missed/extra readings. Same capability as poll.
                 gate(c.data(), "topic/subscribe", "count")?;
+                if !topic_ok(&c.data().topics.subscribe, topic) {
+                    anyhow::bail!("topic {topic} not in this component's :aiueos/subscribes set");
+                }
                 let n = c.data().bus.count(topic) as i64;
                 c.data_mut().calls += 1;
                 Ok(n)
@@ -152,6 +208,9 @@ pub fn run_with_host(
                 // pop the oldest unread sample (FIFO) so a consumer never misses
                 // one; EMPTY when drained. Same capability as poll.
                 gate(c.data(), "topic/subscribe", "take")?;
+                if !topic_ok(&c.data().topics.subscribe, topic) {
+                    anyhow::bail!("topic {topic} not in this component's :aiueos/subscribes set");
+                }
                 let d = c.data_mut();
                 let v = d.bus.take(topic).unwrap_or(EMPTY);
                 d.calls += 1;
@@ -166,6 +225,7 @@ pub fn run_with_host(
     let ctx = HostCtx {
         limits,
         caps: caps.clone(),
+        topics: topics.clone(),
         bus,
         logs: Vec::new(),
         calls: 0,

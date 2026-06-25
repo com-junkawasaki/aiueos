@@ -25,7 +25,50 @@ const MANIFEST_KEYS: &[&str] = &[
     "args",
     "device",
     "wasm-sha256",
+    "publishes",
+    "subscribes",
 ];
+
+/// Parse an optional `:aiueos/{publishes,subscribes}` set of topic ids. Absent →
+/// `None` (unrestricted). A non-set/vector, or a non-integer / out-of-range
+/// element, is a hard error.
+fn topic_id_set(
+    v: &EdnValue,
+    key: &str,
+    id: &str,
+) -> Result<Option<std::collections::BTreeSet<i32>>> {
+    let items: &[EdnValue] = match edn::get(v, "aiueos", key) {
+        None => return Ok(None),
+        Some(EdnValue::Set(s)) => return collect_topic_ids(s.iter(), key, id).map(Some),
+        Some(EdnValue::Vector(xs)) | Some(EdnValue::List(xs)) => xs,
+        Some(_) => {
+            return Err(AiueosError::Schema(format!(
+                "{id}: :aiueos/{key} must be a set of topic ids"
+            )))
+        }
+    };
+    collect_topic_ids(items.iter(), key, id).map(Some)
+}
+
+fn collect_topic_ids<'a>(
+    it: impl Iterator<Item = &'a EdnValue>,
+    key: &str,
+    id: &str,
+) -> Result<std::collections::BTreeSet<i32>> {
+    let mut out = std::collections::BTreeSet::new();
+    for x in it {
+        let n = x.as_integer().ok_or_else(|| {
+            AiueosError::Schema(format!("{id}: :aiueos/{key} must contain only integers"))
+        })?;
+        if n < i32::MIN as i64 || n > i32::MAX as i64 {
+            return Err(AiueosError::Schema(format!(
+                "{id}: :aiueos/{key} topic id {n} out of range"
+            )));
+        }
+        out.insert(n as i32);
+    }
+    Ok(out)
+}
 
 /// The kind of a component. This drives default policy and how the runtime
 /// treats it (a `:driver` may request device capabilities; an `:agent` is
@@ -192,6 +235,10 @@ pub struct Manifest {
     pub args: Vec<i64>,
     /// The device this (driver) component binds to, if declared.
     pub device: Option<Device>,
+    /// Topic ids this component may publish to. `None` = unrestricted.
+    pub publishes: Option<std::collections::BTreeSet<i32>>,
+    /// Topic ids this component may read (poll/take/count). `None` = unrestricted.
+    pub subscribes: Option<std::collections::BTreeSet<i32>>,
 }
 
 impl Manifest {
@@ -294,6 +341,9 @@ impl Manifest {
             Some(e) => e,
         };
 
+        let publishes = topic_id_set(v, "publishes", &id)?;
+        let subscribes = topic_id_set(v, "subscribes", &id)?;
+
         Ok(Manifest {
             id,
             kind,
@@ -309,6 +359,8 @@ impl Manifest {
             entry,
             args,
             device: edn::get(v, "aiueos", "device").map(Device::from_edn),
+            publishes,
+            subscribes,
         })
     }
 

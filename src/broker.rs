@@ -223,9 +223,14 @@ impl Broker {
             }
         };
 
-        // Execute under fuel + memory limits, with the host ABI gated by `caps`.
-        // A host call to a capability not in `caps` traps → surfaces as a run error.
-        let outcome = crate::host::run_with_host(
+        // Execute under fuel + memory limits, with the host ABI gated by `caps`
+        // and restricted to the topic ids the manifest declared. A host call to an
+        // ungranted capability — or an undeclared topic — traps → a run error.
+        let topics = crate::host::TopicAccess {
+            publish: m.publishes.clone(),
+            subscribe: m.subscribes.clone(),
+        };
+        let outcome = crate::host::run_with_host_restricted(
             &wasm,
             &m.entry,
             &m.args,
@@ -233,6 +238,7 @@ impl Broker {
             m.limits.memory_pages,
             caps,
             bus,
+            &topics,
         )?;
         self.audit.append(
             Event::Run,

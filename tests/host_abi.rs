@@ -54,6 +54,13 @@ const PUBLISH_TWICE_TAKE: &str = r#"(module
     (call $pub (i32.const 1) (i64.const 20))
     (call $take (i32.const 1))))"#;
 
+// publishes its arg to topic 1, returns it.
+const PUBLISH_ONE: &str = r#"(module
+  (import "aiueos:host" "publish" (func $p (param i32 i64)))
+  (func (export "tick") (param i64) (result i64)
+    (call $p (i32.const 1) (local.get 0))
+    (local.get 0)))"#;
+
 fn caps(items: &[&str]) -> BTreeSet<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
@@ -134,6 +141,45 @@ fn take_pops_oldest_fifo_unlike_poll() {
 
     // take without topic/subscribe traps.
     assert!(run(PUBLISH_TWICE_TAKE, &[], &caps(&["topic/publish"])).is_err());
+}
+
+#[test]
+fn per_topic_restriction_confines_publishes() {
+    use aiueos::host::{run_with_host_restricted, TopicAccess};
+    // PUBLISH_ONE publishes to topic 1. Restrict it to {1}: ok.
+    let allow_1 = TopicAccess {
+        publish: Some([1].into_iter().collect()),
+        subscribe: None,
+    };
+    assert!(run_with_host_restricted(
+        PUBLISH_ONE.as_bytes(),
+        "tick",
+        &[7],
+        1_000_000,
+        4,
+        &caps(&["topic/publish"]),
+        TopicBus::new(),
+        &allow_1,
+    )
+    .is_ok());
+
+    // Restrict it to {2}: publishing to topic 1 now traps even though it holds
+    // topic/publish — a node can't reach a topic it didn't declare.
+    let allow_2 = TopicAccess {
+        publish: Some([2].into_iter().collect()),
+        subscribe: None,
+    };
+    assert!(run_with_host_restricted(
+        PUBLISH_ONE.as_bytes(),
+        "tick",
+        &[7],
+        1_000_000,
+        4,
+        &caps(&["topic/publish"]),
+        TopicBus::new(),
+        &allow_2,
+    )
+    .is_err());
 }
 
 #[test]

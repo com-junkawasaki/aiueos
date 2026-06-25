@@ -190,6 +190,30 @@ fn manifest_rejects_empty_entry() {
 }
 
 #[test]
+fn manifest_parses_topic_id_sets() {
+    let m = Manifest::parse_str(
+        "{:aiueos/component :d/x :aiueos/kind :driver :aiueos/publishes #{1 2} :aiueos/subscribes #{3}}",
+    )
+    .unwrap();
+    let pubs = m.publishes.expect("publishes set");
+    assert!(pubs.contains(&1) && pubs.contains(&2));
+    assert_eq!(m.subscribes.expect("subscribes").len(), 1);
+    // absent → unrestricted (None)
+    let n = Manifest::parse_str("{:aiueos/component :d/y :aiueos/kind :driver}").unwrap();
+    assert!(n.publishes.is_none() && n.subscribes.is_none());
+}
+
+#[test]
+fn manifest_rejects_non_integer_topic_ids() {
+    assert!(matches!(
+        Manifest::parse_str(
+            r#"{:aiueos/component :d/x :aiueos/kind :driver :aiueos/publishes #{:scan}}"#
+        ),
+        Err(AiueosError::Schema(_))
+    ));
+}
+
+#[test]
 fn manifest_parses_wasm_sha256() {
     let m = Manifest::parse_str(
         r#"{:aiueos/component :app/x :aiueos/kind :app

@@ -9,7 +9,8 @@
 //! | import                | capability         | meaning                          |
 //! |-----------------------|--------------------|----------------------------------|
 //! | `log(i64)`            | `log/write`        | emit an i64 log sample           |
-//! | `clock() -> i64`      | `clock/monotonic`  | monotonic tick (Phase-0: 0)      |
+//! | `clock() -> i64`      | `clock/monotonic`  | monotonic cycle (control loop)   |
+//! | `random() -> i64`     | `random/bytes`     | deterministic pseudo-random      |
 //! | `publish(i32, i64)`   | `topic/publish`    | publish a sample to a topic      |
 //! | `poll(i32) -> i64`    | `topic/subscribe`  | latest sample on a topic         |
 //! | `count(i32) -> i64`   | `topic/subscribe`  | #samples published to a topic    |
@@ -47,6 +48,15 @@ impl TopicAccess {
 
 fn topic_ok(set: &Option<BTreeSet<i32>>, topic: i32) -> bool {
     set.as_ref().map_or(true, |s| s.contains(&topic))
+}
+
+/// splitmix64 — a fast, well-distributed mixing function. Used to make `random()`
+/// deterministic-yet-varied from a seed (reproducible Phase-0 randomness).
+fn splitmix64(seed: u64) -> u64 {
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 /// The store context every host call sees: the conferred capabilities (the gate),
@@ -150,6 +160,26 @@ pub fn run_with_host_restricted(
                 let tick = c.data().bus.tick() as i64;
                 c.data_mut().calls += 1;
                 Ok(tick) // monotonic control-loop cycle (Phase-0 clock stand-in)
+            },
+        )
+        .map_err(run_err)?;
+    linker
+        .func_wrap(
+            "aiueos:host",
+            "random",
+            |mut c: Caller<'_, HostCtx>| -> anyhow::Result<i64> {
+                gate(c.data(), "random/bytes", "random")?;
+                // Deterministic (reproducible) pseudo-random: splitmix64 over the
+                // control-loop cycle + this run's call index. Same cycle + same
+                // call order → same stream, by design (Phase-0 determinism).
+                let d = c.data_mut();
+                let seed = d
+                    .bus
+                    .tick()
+                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    .wrapping_add(d.calls as u64);
+                d.calls += 1;
+                Ok(splitmix64(seed) as i64)
             },
         )
         .map_err(run_err)?;

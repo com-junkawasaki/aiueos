@@ -183,6 +183,22 @@ fn per_topic_restriction_confines_publishes() {
 }
 
 #[test]
+fn random_requires_cap_and_is_deterministic() {
+    const RANDOM: &str = r#"(module
+      (import "aiueos:host" "random" (func $r (result i64)))
+      (func (export "run") (result i64) (call $r)))"#;
+    // granted → a value; two runs at the same cycle give the same value (reproducible).
+    let a = run(RANDOM, &[], &caps(&["random/bytes"])).expect("granted");
+    let b = run(RANDOM, &[], &caps(&["random/bytes"])).expect("granted");
+    assert_eq!(a.result, b.result, "deterministic at the same cycle");
+    // denied without the capability.
+    assert!(
+        run(RANDOM, &[], &BTreeSet::new()).is_err(),
+        "random without random/bytes traps"
+    );
+}
+
+#[test]
 fn capability_attenuation_traps_on_the_missing_one() {
     // Granted subscribe (poll succeeds) but NOT publish → the publish traps even
     // though the component got partway. A capability you weren't given can't be

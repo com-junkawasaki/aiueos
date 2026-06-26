@@ -14,6 +14,9 @@ The Phase-0 substrate plus the runtime/robotics/agent work built on top of it.
 - **Capability graph** + **policy reasoner**: imports must resolve (exporter /
   kernel primitive / grant), effect-vs-trust lockdown (`:ai-generated` denied
   network/secrets/persist), and the driver **DMA→IOMMU** rule.
+- **Fail-loud policy files**: unknown `:aiueos/*` policy keys, an unknown trust in
+  `:aiueos/forbid`, and non-map `grants`/`forbid` are hard errors (a typo can't
+  silently drop a grant or a lockdown).
 - **Broker**: verify → safe-check → compile/load → run, every decision audited.
 - **Safe-kotoba subset** gate (no eval/require/slurp/reflection/dotted host
   classes) before compiling source.
@@ -44,14 +47,18 @@ The Phase-0 substrate plus the runtime/robotics/agent work built on top of it.
 ### Tooling / agent surface
 - Machine-readable **`--edn`** on `verify`/`inspect`/`up`/`run`/`audit` (verdicts,
   denials, and structural errors all as EDN).
-- **`inspect --dot`** — Graphviz of the component dependency graph.
-- `aiueos hash`, helpful errors (e.g. `inspect` on a single manifest), robust CLI
-  arg parsing.
+- **`inspect --dot`** — Graphviz of the component dependency graph (named topics
+  render as the actual dataflow edges).
+- **`up --dry-run`** — link → order → verify a whole system without launching
+  anything (CI / pre-boot validation, no side effects).
+- `aiueos hash`, helpful errors (e.g. `inspect`/`up` on a single manifest point at
+  `verify`/`run`), robust CLI arg parsing.
+- A runnable **authoring example** (`examples/authoring/`) kept verified by a test.
 
 ### Build / project
 - Standalone build: `kotoba-edn` is a git dependency; the CLJ compiler
   (`kototama`) is an opt-in monorepo-only feature.
 - **CI** (GitHub Actions): core + exec-only + rustfmt.
-- **142 tests + 3 doctests** green across the core / exec-only / full configs.
+- **158 tests + 3 doctests** green across the core / exec-only / full configs.
 
 [Unreleased]: https://github.com/com-junkawasaki/aiueos/commits/main

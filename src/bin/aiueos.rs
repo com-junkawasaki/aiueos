@@ -266,6 +266,15 @@ fn dot_graph(sys: &System, graph: &CapabilityGraph) -> String {
 fn cmd_inspect(args: &[String]) -> aiueos::Result<()> {
     let target = positional(args).ok_or_else(|| schema("inspect needs a system file"))?;
     let path = PathBuf::from(target);
+    // A present-but-non-system file is almost always a single manifest passed by
+    // mistake — point the user at the right command instead of a cryptic
+    // "missing :aiueos/components".
+    if path.exists() && !is_system(&path) {
+        return Err(schema(&format!(
+            "{target}: inspect needs a system graph (:aiueos/components); \
+             use `verify` for a single component manifest"
+        )));
+    }
     let sys = System::load(&path)?;
     let graph = sys.graph();
     let policy = load_policy(args)?;

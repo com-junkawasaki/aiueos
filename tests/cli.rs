@@ -331,6 +331,16 @@ fn inspect_edn_emits_structured_snapshot() {
 }
 
 #[test]
+fn inspect_on_a_single_manifest_gives_a_helpful_error() {
+    // A single component manifest isn't a system graph — inspect should say so
+    // (and point at `verify`), not emit a cryptic ":aiueos/components" error.
+    let p = write("single.edn", "{:aiueos/component :app/x :aiueos/kind :app}");
+    let (code, _out, err) = aiueos(&["inspect", p.to_str().unwrap()]);
+    assert_eq!(code, 1);
+    assert!(err.contains("system graph") && err.contains("verify"));
+}
+
+#[test]
 fn inspect_dot_emits_a_graphviz_digraph() {
     let (code, out, _e) = aiueos(&["inspect", "examples/system.aiueos.edn", "--dot"]);
     assert_eq!(code, 0);

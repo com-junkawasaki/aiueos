@@ -6,6 +6,7 @@
 //!   aiueos compile <source.clj|manifest> [-o out.wasm]      CLJ/Kotoba → wasm
 //!   aiueos check   <source.clj>                             safe-kotoba subset gate
 //!   aiueos hash    <file> [--edn]                           sha256 for :aiueos/wasm-sha256
+//!   aiueos sign    <manifest>.edn --key <hex-seed> [--edn]  ed25519-sign the (id, hash) binding
 //!   aiueos audit   [--log <audit.edn>] [--event K] [--component C] [--edn]   replay/query the audit log
 
 use aiueos::audit::AuditLog;
@@ -28,6 +29,7 @@ fn main() -> ExitCode {
         "compile" => cmd_compile(rest),
         "check" => cmd_check(rest),
         "hash" => cmd_hash(rest),
+        "sign" => cmd_sign(rest),
         "audit" => cmd_audit(rest),
         "" | "-h" | "--help" | "help" => {
             print_usage();
@@ -88,6 +90,7 @@ fn print_usage() {
          aiueos compile <source.clj|manifest> [-o out.wasm]\n  \
          aiueos check   <source.clj>\n  \
          aiueos hash    <file> [--edn]\n  \
+         aiueos sign    <manifest>.edn --key <hex-seed> [--edn]   ed25519-sign the (id, hash) binding\n  \
          aiueos audit   [--log <audit.edn>] [--event K] [--component C] [--edn]"
     );
 }
@@ -102,6 +105,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--rounds",
     "--event",
     "--component",
+    "--key",
 ];
 
 /// Tiny flag reader: pull `--name <value>` (or `-o <value>`) out of args.
@@ -697,6 +701,72 @@ fn cmd_hash(args: &[String]) -> aiueos::Result<()> {
         } else {
             // `<hex>  <path>` — paste the hex into the manifest's :aiueos/wasm-sha256.
             println!("{hex}  {target}");
+        }
+        Ok(())
+    }
+}
+
+/// Encode bytes as lowercase hex.
+#[cfg(feature = "signing")]
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Decode an even-length hex string into bytes.
+#[cfg(feature = "signing")]
+fn hex_decode(s: &str) -> std::result::Result<Vec<u8>, String> {
+    if s.len() % 2 != 0 {
+        return Err("hex must be even length".into());
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| "invalid hex".to_string()))
+        .collect()
+}
+
+/// `aiueos sign <manifest> --key <hex-32-byte-seed>` — ed25519-sign the canonical
+/// (id, wasm-sha256) binding (ADR-0003) and print the signature + public key.
+fn cmd_sign(args: &[String]) -> aiueos::Result<()> {
+    #[cfg(not(feature = "signing"))]
+    {
+        let _ = args;
+        return Err(schema("built without the `signing` feature"));
+    }
+    #[cfg(feature = "signing")]
+    {
+        use ed25519_dalek::{Signer, SigningKey};
+        let target = positional(args).ok_or_else(|| schema("sign needs a manifest"))?;
+        let key_hex =
+            flag(args, "--key").ok_or_else(|| schema("sign needs --key <hex 32-byte seed>"))?;
+        let m = Manifest::load(Path::new(target))?;
+        let msg = m.signed_message().ok_or_else(|| {
+            schema(&format!(
+                "{}: sign needs :aiueos/wasm-sha256 to bind (run `aiueos hash` first)",
+                m.id
+            ))
+        })?;
+        let seed_bytes = hex_decode(&key_hex).map_err(|e| schema(&format!("--key: {e}")))?;
+        let seed: [u8; 32] = seed_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| schema("--key must be 32 bytes (64 hex chars)"))?;
+        let sk = SigningKey::from_bytes(&seed);
+        let sig_hex = hex_encode(&sk.sign(msg.as_bytes()).to_bytes());
+        let pk_hex = hex_encode(sk.verifying_key().as_bytes());
+
+        if args.iter().any(|a| a == "--edn") {
+            use kotoba_edn::EdnValue as E;
+            println!(
+                "{}",
+                kotoba_edn::to_string(&E::map([
+                    (E::kw("aiueos", "signature"), E::string(sig_hex)),
+                    (E::kw("aiueos", "public-key"), E::string(pk_hex)),
+                ]))
+            );
+        } else {
+            println!("signed `{}` (binding: {:?})", m.id, msg);
+            println!("  add to the manifest:  :aiueos/signature \"{sig_hex}\"");
+            println!("  add to the policy:    :aiueos/signers {{:<name> \"{pk_hex}\"}}");
         }
         Ok(())
     }

@@ -440,6 +440,49 @@ fn hash_missing_file_errors() {
     assert_eq!(code, 1);
 }
 
+#[cfg(feature = "signing")]
+#[test]
+fn sign_output_is_consumable_by_the_verifier() {
+    // sign a manifest via the CLI, then feed the emitted signature + public key
+    // back into the library verifier — the full sign → verify cycle.
+    let p = write(
+        "tosign.edn",
+        r#"{:aiueos/component :app/demo :aiueos/kind :app :aiueos/wasm-sha256 "abc123"}"#,
+    );
+    let seed = "07".repeat(32); // 32-byte hex seed
+    let (code, out, _e) = aiueos(&["sign", p.to_str().unwrap(), "--key", &seed, "--edn"]);
+    assert_eq!(code, 0);
+    let v = kotoba_edn::parse(out.trim()).expect("valid EDN");
+    let sig = aiueos::edn::get(&v, "aiueos", "signature")
+        .and_then(|x| x.as_string())
+        .unwrap()
+        .to_string();
+    let pk = aiueos::edn::get(&v, "aiueos", "public-key")
+        .and_then(|x| x.as_string())
+        .unwrap()
+        .to_string();
+
+    let signed = aiueos::manifest::Manifest::parse_str(&format!(
+        r#"{{:aiueos/component :app/demo :aiueos/kind :app :aiueos/wasm-sha256 "abc123"
+            :aiueos/signer "dev" :aiueos/signature "{sig}"}}"#
+    ))
+    .unwrap();
+    let policy = aiueos::policy::Policy::from_edn(
+        &kotoba_edn::parse(&format!("{{:aiueos/signers {{:dev \"{pk}\"}}}}")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        aiueos::signing::verify(&signed, &policy).unwrap(),
+        aiueos::signing::SigStatus::Verified("dev".into()),
+        "the CLI-produced signature verifies"
+    );
+
+    // signing a manifest with no artifact hash to bind → error
+    let nohash = write("nohash.edn", "{:aiueos/component :app/n :aiueos/kind :app}");
+    let (code, _o, _e) = aiueos(&["sign", nohash.to_str().unwrap(), "--key", &seed]);
+    assert_eq!(code, 1, "no :aiueos/wasm-sha256 → nothing to sign");
+}
+
 #[cfg(feature = "wasm-runtime")]
 #[test]
 fn up_on_a_single_manifest_gives_a_helpful_error() {

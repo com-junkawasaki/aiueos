@@ -362,6 +362,17 @@ fn policy_forbid_overrides_a_trust_level() {
 }
 
 #[test]
+fn policy_rejects_unknown_keys() {
+    // A typo'd policy key would silently grant nothing / allow everything.
+    assert!(matches!(
+        Policy::from_edn(&kotoba_edn::parse("{:aiueos/grnts {:driver/x #{:iommu}}}").unwrap()),
+        Err(AiueosError::Schema(_))
+    ));
+    // Foreign-namespaced keys are still allowed (annotations).
+    assert!(Policy::from_edn(&kotoba_edn::parse("{:aiueos/policy :p :note/x 1}").unwrap()).is_ok());
+}
+
+#[test]
 fn policy_default_locks_down_ai_generated() {
     let p = Policy::default();
     let f = p.forbid_effects.get(&Trust::AiGenerated).unwrap();

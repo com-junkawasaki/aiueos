@@ -103,6 +103,26 @@ impl Policy {
     /// policy (kernel-caps are unioned, grants merged, forbiddances overridden
     /// per-trust).
     pub fn from_edn(v: &EdnValue) -> crate::error::Result<Policy> {
+        // Reject unknown `:aiueos/*` keys — a typo like `:aiueos/grnts` would
+        // otherwise silently grant nothing (or `:aiueos/forbd` silently allow),
+        // a security-relevant silent failure. Fail loud, like manifests.
+        const POLICY_KEYS: &[&str] = &["policy", "kernel-caps", "grants", "forbid"];
+        if let Some(map) = v.as_map() {
+            let mut unknown: Vec<String> = map
+                .keys()
+                .filter_map(|k| k.as_keyword())
+                .filter(|kw| kw.namespace() == Some("aiueos") && !POLICY_KEYS.contains(&kw.name()))
+                .map(|kw| kw.to_qualified())
+                .collect();
+            if !unknown.is_empty() {
+                unknown.sort();
+                return Err(crate::error::AiueosError::Schema(format!(
+                    "policy: unknown key(s): {}",
+                    unknown.join(", ")
+                )));
+            }
+        }
+
         let mut p = Policy::default();
         for c in edn::kw_collection(edn::get(v, "aiueos", "kernel-caps")) {
             p.kernel_caps.insert(c);

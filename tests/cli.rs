@@ -442,6 +442,26 @@ fn hash_missing_file_errors() {
 
 #[cfg(feature = "signing")]
 #[test]
+fn the_signed_example_verifies_only_with_its_signer_policy() {
+    // The bundled signed example verifies under the policy that registers its
+    // signer, and is denied without it (unregistered signer). Keeps the example
+    // and its committed signature honest.
+    let (code, out, _e) = aiueos(&[
+        "verify",
+        "examples/signed/demo.edn",
+        "--policy",
+        "examples/signed/policy.edn",
+    ]);
+    assert_eq!(code, 0, "signed example verifies with its signer policy");
+    assert!(out.contains("verified"));
+
+    // default policy has no signers → the signer is unregistered → denied
+    let (code, _o, _e) = aiueos(&["verify", "examples/signed/demo.edn"]);
+    assert_eq!(code, 1, "denied without the signer registered");
+}
+
+#[cfg(feature = "signing")]
+#[test]
 fn sign_output_is_consumable_by_the_verifier() {
     // sign a manifest via the CLI, then feed the emitted signature + public key
     // back into the library verifier — the full sign → verify cycle.

@@ -198,8 +198,9 @@ pub fn run_with_host_restricted(
             |mut c: Caller<'_, HostCtx>| -> anyhow::Result<i64> {
                 gate(c.data(), "random/bytes", "random")?;
                 // Deterministic (reproducible) pseudo-random: splitmix64 over the
-                // control-loop cycle + this run's call index. Same cycle + same
-                // call order → same stream, by design (Phase-0 determinism).
+                // per-run seed + control-loop cycle + this run's call index. Same
+                // run + same cycle + same call order → same stream, by design
+                // (Phase-0 determinism); distinct components → independent streams.
                 // NOT a CSPRNG — predictable; never use for keys/nonces/secrets.
                 let d = c.data_mut();
                 let mixed = d

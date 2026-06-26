@@ -445,6 +445,31 @@ fn safe_accepts_a_multi_form_pure_program() {
 }
 
 #[test]
+fn safe_rejects_each_escape_hatch() {
+    // A representative span of the DENY list — guards against a token being
+    // dropped from the security-critical safe-kotoba gate.
+    for src in [
+        "(defn f [x] (read-string x))",
+        "(defn f [] (spit y 1))",
+        "(require evil)",
+        "(use evil)",
+        "(defmacro m [] 1)",
+        "(defn f [] (alter-var-root v))",
+        "(defn f [] (intern n s))",
+        "(defn f [] (with-redefs [a 1] a))",
+        "(defn f [] (Runtime/getRuntime))",
+        "(defn f [] (System/getenv))",
+        "(defn f [] (java.net.Socket.))",
+        "(defn f [] (load-string s))",
+    ] {
+        assert!(
+            matches!(safe::check(src), Err(AiueosError::Unsafe(_))),
+            "safe-kotoba must reject: {src}"
+        );
+    }
+}
+
+#[test]
 fn safe_rejects_dotted_host_class() {
     // Bare dotted class symbol (no `/`) — previously slipped through.
     assert!(matches!(

@@ -265,3 +265,26 @@ fn a_signature_cannot_rescue_swapped_artifact_bytes() {
         "swapped bytes rejected despite a valid signature"
     );
 }
+
+#[test]
+fn malformed_crypto_input_errors_without_panicking() {
+    let key = keypair();
+    let good_policy = policy_with_signer("alice", &hex(key.verifying_key().as_bytes()));
+    // odd-length, non-hex, and valid-hex-but-wrong-length signatures
+    for bad_sig in ["abc", "zz", "00"] {
+        assert!(
+            verify(&signed_manifest(bad_sig), &good_policy).is_err(),
+            "malformed signature `{bad_sig}` must error"
+        );
+    }
+    // a registered signer whose key is malformed (not 32 bytes) — still an error,
+    // not a panic, even with an otherwise-valid signature.
+    let sig = hex(&key.sign(b"driver/sensor\nabc123").to_bytes());
+    for bad_key in ["abcd", "zz", &"11".repeat(31)] {
+        let policy = policy_with_signer("alice", bad_key);
+        assert!(
+            verify(&signed_manifest(&sig), &policy).is_err(),
+            "malformed signer key `{bad_key}` must error"
+        );
+    }
+}

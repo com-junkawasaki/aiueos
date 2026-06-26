@@ -19,6 +19,9 @@ pub enum ViolationKind {
     ForbiddenEffect,
     /// A component performing DMA without an IOMMU requirement/grant.
     DmaWithoutIommu,
+    /// A signed manifest whose signature is missing context, unregistered, or
+    /// fails to verify (ADR-0003).
+    BadSignature,
 }
 
 impl ViolationKind {
@@ -27,6 +30,7 @@ impl ViolationKind {
             ViolationKind::UnresolvedCapability => "unresolved-capability",
             ViolationKind::ForbiddenEffect => "forbidden-effect",
             ViolationKind::DmaWithoutIommu => "dma-without-iommu",
+            ViolationKind::BadSignature => "bad-signature",
         }
     }
 }
@@ -54,6 +58,9 @@ pub struct Policy {
     pub grants: BTreeMap<String, BTreeSet<String>>,
     /// Effects forbidden for a given trust level.
     pub forbid_effects: BTreeMap<Trust, BTreeSet<String>>,
+    /// Trusted signer id → hex ed25519 public key (`:aiueos/signers`). A signed
+    /// manifest is authentic only if its signer resolves here (ADR-0003).
+    pub signers: BTreeMap<String, String>,
 }
 
 impl Default for Policy {
@@ -94,6 +101,7 @@ impl Default for Policy {
             kernel_caps,
             grants: BTreeMap::new(),
             forbid_effects,
+            signers: BTreeMap::new(),
         }
     }
 }
@@ -106,7 +114,7 @@ impl Policy {
         // Reject unknown `:aiueos/*` keys — a typo like `:aiueos/grnts` would
         // otherwise silently grant nothing (or `:aiueos/forbd` silently allow),
         // a security-relevant silent failure. Fail loud, like manifests.
-        const POLICY_KEYS: &[&str] = &["policy", "kernel-caps", "grants", "forbid"];
+        const POLICY_KEYS: &[&str] = &["policy", "kernel-caps", "grants", "forbid", "signers"];
         if let Some(map) = v.as_map() {
             let mut unknown: Vec<String> = map
                 .keys()
@@ -159,6 +167,21 @@ impl Policy {
                 }
             }
             Some(_) => return Err(Schema("policy: :aiueos/forbid must be a map".into())),
+        }
+        match edn::get(v, "aiueos", "signers") {
+            None => {}
+            Some(EdnValue::Map(sg)) => {
+                for (k, key) in sg {
+                    let name = edn::kw_string(k).ok_or_else(|| {
+                        Schema("policy: :aiueos/signers keys must be keywords".into())
+                    })?;
+                    let hex = key.as_string().ok_or_else(|| {
+                        Schema(format!("policy: signer `{name}` key must be a hex string"))
+                    })?;
+                    p.signers.insert(name, hex.to_string());
+                }
+            }
+            Some(_) => return Err(Schema("policy: :aiueos/signers must be a map".into())),
         }
         Ok(p)
     }

@@ -67,6 +67,8 @@ pub mod topic;
 pub mod host;
 #[cfg(feature = "wasm-runtime")]
 pub mod runtime;
+#[cfg(feature = "signing")]
+pub mod signing;
 
 pub use error::{AiueosError, Result};
 pub use manifest::{Kind, Limits, Manifest, Trust};

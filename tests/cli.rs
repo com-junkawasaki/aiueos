@@ -443,6 +443,23 @@ fn up_on_a_single_manifest_gives_a_helpful_error() {
 
 #[cfg(feature = "wasm-runtime")]
 #[test]
+fn dry_run_validates_the_clj_system_without_the_compiler() {
+    // The CLJ example system can't be *booted* without the kototama feature, but
+    // --dry-run stops before compilation — so it validates the system's manifests,
+    // wiring, and policy even in the default/standalone build.
+    let (code, out, _e) = aiueos(&[
+        "up",
+        "examples/system.aiueos.edn",
+        "--policy",
+        "examples/policy/default.edn",
+        "--dry-run",
+    ]);
+    assert_eq!(code, 0, "dry-run validates without compiling CLJ");
+    assert!(out.contains("4 component(s) would launch"));
+}
+
+#[cfg(feature = "wasm-runtime")]
+#[test]
 fn up_dry_run_verifies_without_launching() {
     let (code, out, _e) = aiueos(&["up", "examples/robot/robot.aiueos.edn", "--dry-run"]);
     assert_eq!(code, 0);

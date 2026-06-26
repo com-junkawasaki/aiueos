@@ -341,6 +341,17 @@ fn inspect_on_a_single_manifest_gives_a_helpful_error() {
 }
 
 #[test]
+fn inspect_dot_renders_the_robot_topic_dataflow() {
+    // Named topics ARE capability-graph edges, so --dot draws the actual
+    // sensor → planner → actuator pipeline (the boot-order dataflow).
+    let (code, out, _e) = aiueos(&["inspect", "examples/robot/robot.aiueos.edn", "--dot"]);
+    assert_eq!(code, 0);
+    assert!(out.contains(r#""driver/sensor" -> "agent/planner""#));
+    assert!(out.contains(r#""agent/planner" -> "driver/actuator""#));
+    assert!(out.contains("topic/scan") && out.contains("topic/cmd"));
+}
+
+#[test]
 fn inspect_human_shows_topic_confinement() {
     // The robot nodes derive publishes/subscribes — the human view shows them
     // like it shows device bindings.

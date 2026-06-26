@@ -261,6 +261,28 @@ a call without it **traps**.
 | `take(i32) -> i64`  | `topic/subscribe` | pop oldest unread sample (FIFO)  |
 | `count(i32) -> i64` | `topic/subscribe` | #samples published to a topic    |
 
+A component imports the host functions it needs and is described by a manifest
+that grants the matching capabilities (here a noisy sensor):
+
+```wat
+;; sensor.wat — import only what you call
+(module
+  (import "aiueos:host" "publish" (func $publish (param i32 i64)))
+  (import "aiueos:host" "random"  (func $random  (result i64)))
+  (func (export "tick") (result i64)
+    (local $r i64)
+    (local.set $r (i64.rem_s (call $random) (i64.const 100)))  ;; reading 0..99
+    (call $publish (i32.const 1) (local.get $r))               ;; → topic 1 ("scan")
+    (local.get $r)))
+```
+```edn
+{:aiueos/component :driver/sensor :aiueos/kind :driver
+ :aiueos/wasm "sensor.wat" :aiueos/entry "tick"
+ :aiueos/imports #{:topic/publish :random/bytes} :aiueos/exports #{:topic/scan}
+ :aiueos/topics {:scan 1}}   ; → publishes #{1} derived; calling random() without
+                             ; :random/bytes, or publishing to any other topic, traps
+```
+
 The [`topic`](src/topic.rs) bus is the ROS-topic analogue (numeric topic ids,
 i64 samples). It keeps both the latest value (`poll`, peek) and a per-topic FIFO
 of unread samples (`take`, drain) — so a slow consumer can read *every* reading,

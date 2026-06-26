@@ -61,6 +61,10 @@ pub struct Policy {
     /// Trusted signer id → hex ed25519 public key (`:aiueos/signers`). A signed
     /// manifest is authentic only if its signer resolves here (ADR-0003).
     pub signers: BTreeMap<String, String>,
+    /// `:aiueos/require-signed` — when true, an *unsigned* component is denied
+    /// (every component must carry a valid signature). Enforced under the
+    /// `signing` feature.
+    pub require_signed: bool,
 }
 
 impl Default for Policy {
@@ -102,6 +106,7 @@ impl Default for Policy {
             grants: BTreeMap::new(),
             forbid_effects,
             signers: BTreeMap::new(),
+            require_signed: false,
         }
     }
 }
@@ -114,7 +119,14 @@ impl Policy {
         // Reject unknown `:aiueos/*` keys — a typo like `:aiueos/grnts` would
         // otherwise silently grant nothing (or `:aiueos/forbd` silently allow),
         // a security-relevant silent failure. Fail loud, like manifests.
-        const POLICY_KEYS: &[&str] = &["policy", "kernel-caps", "grants", "forbid", "signers"];
+        const POLICY_KEYS: &[&str] = &[
+            "policy",
+            "kernel-caps",
+            "grants",
+            "forbid",
+            "signers",
+            "require-signed",
+        ];
         if let Some(map) = v.as_map() {
             let mut unknown: Vec<String> = map
                 .keys()
@@ -182,6 +194,15 @@ impl Policy {
                 }
             }
             Some(_) => return Err(Schema("policy: :aiueos/signers must be a map".into())),
+        }
+        match edn::get(v, "aiueos", "require-signed") {
+            None => {}
+            Some(EdnValue::Bool(b)) => p.require_signed = *b,
+            Some(_) => {
+                return Err(Schema(
+                    "policy: :aiueos/require-signed must be a boolean".into(),
+                ))
+            }
         }
         Ok(p)
     }

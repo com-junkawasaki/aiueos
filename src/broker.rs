@@ -116,6 +116,14 @@ impl Broker {
         {
             use crate::signing::{verify, SigStatus};
             return match verify(m, &self.policy)? {
+                // A `require-signed` policy rejects unsigned components outright.
+                SigStatus::Unsigned if self.policy.require_signed => {
+                    Err(AiueosError::Denied(vec![Violation {
+                        component: m.id.clone(),
+                        kind: crate::policy::ViolationKind::BadSignature,
+                        message: "unsigned component rejected (require-signed policy)".into(),
+                    }]))
+                }
                 SigStatus::Unsigned => Ok(None),
                 SigStatus::Verified(s) => Ok(Some(s)),
             };

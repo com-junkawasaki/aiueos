@@ -176,3 +176,45 @@ fn broker_denies_a_bad_signature_and_audits_provenance() {
     );
     let _ = std::fs::remove_file(&logpath);
 }
+
+#[test]
+fn require_signed_policy_denies_unsigned_but_allows_signed() {
+    let key = keypair();
+    let signers = format!(
+        "{{:aiueos/require-signed true :aiueos/signers {{:alice \"{}\"}}}}",
+        hex(key.verifying_key().as_bytes())
+    );
+    let policy = Policy::from_edn(&kotoba_edn::parse(&signers).unwrap()).unwrap();
+    assert!(policy.require_signed);
+
+    // unsigned → denied under require-signed
+    let unsigned = Manifest::parse_str("{:aiueos/component :app/u :aiueos/kind :app}").unwrap();
+    let gu = CapabilityGraph::build(std::slice::from_ref(&unsigned));
+    let broker = Broker::new(
+        policy,
+        AuditLog::new(std::env::temp_dir().join("aiueos-reqsigned.edn")),
+    );
+    assert!(
+        broker.verify_one(&unsigned, &gu).is_err(),
+        "require-signed denies an unsigned component"
+    );
+
+    // a validly signed component still passes
+    let sig = key.sign(b"app/s\nabc");
+    let signed = Manifest::parse_str(&format!(
+        r#"{{:aiueos/component :app/s :aiueos/kind :app :aiueos/wasm-sha256 "abc"
+            :aiueos/signer "alice" :aiueos/signature "{}"}}"#,
+        hex(&sig.to_bytes())
+    ))
+    .unwrap();
+    let gs = CapabilityGraph::build(std::slice::from_ref(&signed));
+    assert!(
+        broker.verify_one(&signed, &gs).is_ok(),
+        "a signed component passes require-signed"
+    );
+}
+
+#[test]
+fn require_signed_must_be_a_boolean() {
+    assert!(Policy::from_edn(&kotoba_edn::parse("{:aiueos/require-signed 1}").unwrap()).is_err());
+}

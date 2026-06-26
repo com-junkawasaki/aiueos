@@ -123,27 +123,42 @@ impl Policy {
             }
         }
 
+        use crate::error::AiueosError::Schema;
         let mut p = Policy::default();
         for c in edn::kw_collection(edn::get(v, "aiueos", "kernel-caps")) {
             p.kernel_caps.insert(c);
         }
-        if let Some(EdnValue::Map(g)) = edn::get(v, "aiueos", "grants") {
-            for (k, caps) in g {
-                if let Some(id) = edn::kw_string(k) {
-                    let set: BTreeSet<String> =
-                        edn::kw_collection(Some(caps)).into_iter().collect();
-                    p.grants.entry(id).or_default().extend(set);
+        match edn::get(v, "aiueos", "grants") {
+            None => {}
+            Some(EdnValue::Map(g)) => {
+                for (k, caps) in g {
+                    if let Some(id) = edn::kw_string(k) {
+                        let set: BTreeSet<String> =
+                            edn::kw_collection(Some(caps)).into_iter().collect();
+                        p.grants.entry(id).or_default().extend(set);
+                    }
                 }
             }
+            Some(_) => return Err(Schema("policy: :aiueos/grants must be a map".into())),
         }
-        if let Some(EdnValue::Map(fb)) = edn::get(v, "aiueos", "forbid") {
-            for (k, effs) in fb {
-                if let Some(trust) = edn::kw_string(k).and_then(|s| Trust::parse(&s)) {
+        match edn::get(v, "aiueos", "forbid") {
+            None => {}
+            Some(EdnValue::Map(fb)) => {
+                for (k, effs) in fb {
+                    // forbid keys are a closed set of trust levels — an unknown
+                    // trust would silently fail to apply the lockdown.
+                    let name = edn::kw_string(k).ok_or_else(|| {
+                        Schema("policy: :aiueos/forbid keys must be trust keywords".into())
+                    })?;
+                    let trust = Trust::parse(&name).ok_or_else(|| {
+                        Schema(format!("policy: unknown trust `{name}` in :aiueos/forbid"))
+                    })?;
                     let set: BTreeSet<String> =
                         edn::kw_collection(Some(effs)).into_iter().collect();
                     p.forbid_effects.insert(trust, set);
                 }
             }
+            Some(_) => return Err(Schema("policy: :aiueos/forbid must be a map".into())),
         }
         Ok(p)
     }

@@ -362,6 +362,25 @@ fn policy_forbid_overrides_a_trust_level() {
 }
 
 #[test]
+fn policy_rejects_unknown_trust_and_non_maps() {
+    for bad in [
+        // unknown trust in forbid → the lockdown would silently not apply
+        "{:aiueos/forbid {:ai-genrated #{:network}}}",
+        // non-map forbid / grants
+        "{:aiueos/forbid 5}",
+        "{:aiueos/grants 5}",
+    ] {
+        assert!(
+            matches!(
+                Policy::from_edn(&kotoba_edn::parse(bad).unwrap()),
+                Err(AiueosError::Schema(_))
+            ),
+            "should reject: {bad}"
+        );
+    }
+}
+
+#[test]
 fn policy_rejects_unknown_keys() {
     // A typo'd policy key would silently grant nothing / allow everything.
     assert!(matches!(

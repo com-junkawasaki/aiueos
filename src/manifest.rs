@@ -442,6 +442,15 @@ impl Manifest {
         })
     }
 
+    /// A clone of this manifest at a different trust level — used when a valid
+    /// signature elevates a component to `:verified` (ADR-0003).
+    pub fn with_trust(&self, trust: Trust) -> Manifest {
+        Manifest {
+            trust,
+            ..self.clone()
+        }
+    }
+
     /// The canonical message a signature covers: `"<id>\n<wasm-sha256>"` — binds
     /// the component identity to its exact artifact (ADR-0003). `None` if the
     /// manifest has no artifact hash to bind (nothing to sign).

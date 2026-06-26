@@ -4,6 +4,9 @@
 //! verdict. Generates a keypair in-test so it's self-contained.
 #![cfg(feature = "signing")]
 
+use aiueos::audit::AuditLog;
+use aiueos::broker::Broker;
+use aiueos::graph::CapabilityGraph;
 use aiueos::manifest::Manifest;
 use aiueos::policy::Policy;
 use aiueos::signing::{verify, SigStatus};
@@ -90,4 +93,86 @@ fn a_signature_without_artifact_hash_is_denied() {
     .unwrap();
     let policy = policy_with_signer("alice", &hex(keypair().verifying_key().as_bytes()));
     assert!(verify(&m, &policy).is_err(), "no hash to bind → denied");
+}
+
+// --- broker integration (ADR-0003 increment 3) ---------------------------------
+
+#[test]
+fn valid_signature_elevates_trust_unlocking_a_forbidden_effect() {
+    // A :driver defaults to :untrusted, which forbids the :secrets effect. A valid
+    // signature elevates it to :verified (no such forbiddance) — so signing is what
+    // makes the difference between denied and allowed.
+    let key = keypair();
+    let sig = key.sign(b"driver/x\nabc");
+    let signed = Manifest::parse_str(&format!(
+        r#"{{:aiueos/component :driver/x :aiueos/kind :driver :aiueos/wasm-sha256 "abc"
+            :aiueos/effects #{{:secrets}} :aiueos/signer "alice" :aiueos/signature "{}"}}"#,
+        hex(&sig.to_bytes())
+    ))
+    .unwrap();
+    let g = CapabilityGraph::build(std::slice::from_ref(&signed));
+    let policy = policy_with_signer("alice", &hex(key.verifying_key().as_bytes()));
+    let broker = Broker::new(
+        policy,
+        AuditLog::new(std::env::temp_dir().join("aiueos-sign-elev.edn")),
+    );
+    assert!(
+        broker.verify_one(&signed, &g).is_ok(),
+        "signed → :verified → :secrets allowed"
+    );
+
+    // Same component, unsigned → stays :untrusted → :secrets is forbidden → denied.
+    let unsigned = Manifest::parse_str(
+        "{:aiueos/component :driver/x :aiueos/kind :driver :aiueos/effects #{:secrets}}",
+    )
+    .unwrap();
+    let g2 = CapabilityGraph::build(std::slice::from_ref(&unsigned));
+    let plain = Broker::new(
+        Policy::default(),
+        AuditLog::new(std::env::temp_dir().join("aiueos-sign-elev2.edn")),
+    );
+    assert!(
+        plain.verify_one(&unsigned, &g2).is_err(),
+        "unsigned :untrusted :secrets denied"
+    );
+}
+
+#[test]
+fn broker_denies_a_bad_signature_and_audits_provenance() {
+    let logpath = std::env::temp_dir().join("aiueos-sign-prov.edn");
+    let _ = std::fs::remove_file(&logpath);
+    let key = keypair();
+
+    // valid signature → grant audited with the signer (provenance)
+    let sig = key.sign(b"driver/x\nabc");
+    let good = Manifest::parse_str(&format!(
+        r#"{{:aiueos/component :driver/x :aiueos/kind :driver :aiueos/wasm-sha256 "abc"
+            :aiueos/signer "alice" :aiueos/signature "{}"}}"#,
+        hex(&sig.to_bytes())
+    ))
+    .unwrap();
+    let g = CapabilityGraph::build(std::slice::from_ref(&good));
+    let policy = policy_with_signer("alice", &hex(key.verifying_key().as_bytes()));
+    let broker = Broker::new(policy, AuditLog::new(&logpath));
+    broker.verify_one(&good, &g).expect("verified");
+    let entries = AuditLog::new(&logpath).read().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|e| aiueos::edn::get_str(e, "aiueos", "detail")
+                .is_some_and(|d| d.contains("signer: alice"))),
+        "grant records the signer"
+    );
+
+    // forged signature → Denied at the broker
+    let bad = Manifest::parse_str(
+        r#"{:aiueos/component :driver/x :aiueos/kind :driver :aiueos/wasm-sha256 "abc"
+            :aiueos/signer "alice" :aiueos/signature "00"}"#,
+    )
+    .unwrap();
+    assert!(
+        broker.verify_one(&bad, &g).is_err(),
+        "forged signature denied"
+    );
+    let _ = std::fs::remove_file(&logpath);
 }

@@ -6,7 +6,7 @@ use crate::audit::{AuditLog, Event};
 use crate::error::{AiueosError, Result};
 use crate::graph::{CapabilityGraph, System};
 use crate::manifest::Manifest;
-use crate::policy::{self, Grant, Policy};
+use crate::policy::{self, Grant, Policy, Violation};
 #[cfg(feature = "wasm-runtime")]
 use crate::topic::TopicBus;
 #[cfg(feature = "wasm-runtime")]
@@ -47,23 +47,12 @@ impl Broker {
         let mut grants = Vec::new();
         let mut all_violations = Vec::new();
         for m in &system.components {
-            match policy::verify_component(m, &graph, &self.policy) {
-                Ok(grant) => {
-                    let caps: Vec<&str> = grant.capabilities.iter().map(|s| s.as_str()).collect();
-                    self.audit
-                        .append(Event::Grant, &m.id, &format!("caps: {}", caps.join(" ")))?;
-                    grants.push(grant);
-                }
-                Err(vs) => {
-                    for v in &vs {
-                        self.audit.append(
-                            Event::Deny,
-                            &m.id,
-                            &format!("[{}] {}", v.kind.label(), v.message),
-                        )?;
-                    }
-                    all_violations.extend(vs);
-                }
+            match self.verify_one(m, &graph) {
+                Ok(grant) => grants.push(grant),
+                // Per-component denials are already audited by verify_one; here we
+                // just aggregate so the whole system's violations are reported.
+                Err(AiueosError::Denied(vs)) => all_violations.extend(vs),
+                Err(other) => return Err(other),
             }
         }
         if all_violations.is_empty() {
@@ -74,25 +63,67 @@ impl Broker {
     }
 
     /// Verify a single component against a graph (used by `aiueos run`, where the
-    /// graph may be just the component itself or its declared system).
+    /// graph may be just the component itself or its declared system). Runs
+    /// signature authenticity (ADR-0003) first: a bad signature denies; a valid
+    /// one elevates the component to `:verified` and is recorded in the audit.
     pub fn verify_one(&self, m: &Manifest, graph: &CapabilityGraph) -> Result<Grant> {
-        match policy::verify_component(m, graph, &self.policy) {
+        let signer = match self.authenticate(m) {
+            Ok(s) => s,
+            Err(AiueosError::Denied(vs)) => return Err(self.deny(m, vs)),
+            Err(other) => return Err(other),
+        };
+        // A signature elevates an under-trusted component to :verified for the
+        // capability check (unlocking the verified tier's policy).
+        let elevated;
+        let m_eff = match &signer {
+            Some(_) if m.trust > crate::manifest::Trust::Verified => {
+                elevated = m.with_trust(crate::manifest::Trust::Verified);
+                &elevated
+            }
+            _ => m,
+        };
+        match policy::verify_component(m_eff, graph, &self.policy) {
             Ok(grant) => {
                 let caps: Vec<&str> = grant.capabilities.iter().map(|s| s.as_str()).collect();
-                self.audit
-                    .append(Event::Grant, &m.id, &format!("caps: {}", caps.join(" ")))?;
+                let detail = match &signer {
+                    Some(s) => format!("caps: {} signer: {s}", caps.join(" ")),
+                    None => format!("caps: {}", caps.join(" ")),
+                };
+                self.audit.append(Event::Grant, &m.id, &detail)?;
                 Ok(grant)
             }
-            Err(vs) => {
-                for v in &vs {
-                    self.audit.append(
-                        Event::Deny,
-                        &m.id,
-                        &format!("[{}] {}", v.kind.label(), v.message),
-                    )?;
-                }
-                Err(AiueosError::Denied(vs))
-            }
+            Err(vs) => Err(self.deny(m, vs)),
+        }
+    }
+
+    /// Audit a list of violations as denials and wrap them as a `Denied` error.
+    fn deny(&self, m: &Manifest, vs: Vec<Violation>) -> AiueosError {
+        for v in &vs {
+            let _ = self.audit.append(
+                Event::Deny,
+                &m.id,
+                &format!("[{}] {}", v.kind.label(), v.message),
+            );
+        }
+        AiueosError::Denied(vs)
+    }
+
+    /// Verify a manifest's signature (ADR-0003): `Ok(Some(signer))` if a valid
+    /// signature names a registered signer, `Ok(None)` if unsigned, `Err(Denied)`
+    /// on a bad/forged signature. Without the `signing` feature, always `None`.
+    fn authenticate(&self, m: &Manifest) -> Result<Option<String>> {
+        #[cfg(feature = "signing")]
+        {
+            use crate::signing::{verify, SigStatus};
+            return match verify(m, &self.policy)? {
+                SigStatus::Unsigned => Ok(None),
+                SigStatus::Verified(s) => Ok(Some(s)),
+            };
+        }
+        #[cfg(not(feature = "signing"))]
+        {
+            let _ = m;
+            Ok(None)
         }
     }
 

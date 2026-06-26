@@ -226,6 +226,23 @@ fn publishes_subscribes_derived_from_named_topics() {
 }
 
 #[test]
+fn manifest_rejects_malformed_topics_map() {
+    for bad in [
+        // not a map
+        "{:aiueos/component :a/x :aiueos/kind :app :aiueos/topics 5}",
+        // non-integer value
+        r#"{:aiueos/component :a/x :aiueos/kind :app :aiueos/topics {:scan "x"}}"#,
+        // non-keyword key
+        r#"{:aiueos/component :a/x :aiueos/kind :app :aiueos/topics {"scan" 1}}"#,
+    ] {
+        assert!(
+            matches!(Manifest::parse_str(bad), Err(AiueosError::Schema(_))),
+            "should reject: {bad}"
+        );
+    }
+}
+
+#[test]
 fn explicit_publishes_override_derivation() {
     let m = Manifest::parse_str(
         r#"{:aiueos/component :d/x :aiueos/kind :driver

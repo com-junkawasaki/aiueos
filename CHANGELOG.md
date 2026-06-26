@@ -41,6 +41,11 @@ The Phase-0 substrate plus the runtime/robotics/agent work built on top of it.
 ### Security / supply chain
 - **Artifact integrity**: `:aiueos/wasm-sha256` is verified before run
   (tamper detection); `aiueos hash` computes it.
+- **Manifest authenticity (ed25519 signatures, ADR-0003)**: `:aiueos/signature`
+  over the identity↔artifact binding, verified against the policy
+  `:aiueos/signers` registry. Valid → trust elevated to `:verified` + signer
+  audited; forged/unregistered → denied. `:aiueos/require-signed` rejects unsigned
+  components. `aiueos sign` produces signatures (`signing` feature, default-on).
 - **Audit**: append-only EDN log records grant/deny/compile/run **and runtime
   traps (reject)**; queryable with `aiueos audit --event/--component/--edn`.
 
@@ -59,6 +64,6 @@ The Phase-0 substrate plus the runtime/robotics/agent work built on top of it.
 - Standalone build: `kotoba-edn` is a git dependency; the CLJ compiler
   (`kototama`) is an opt-in monorepo-only feature.
 - **CI** (GitHub Actions): core + exec-only + rustfmt.
-- **158 tests + 3 doctests** green across the core / exec-only / full configs.
+- **170 tests + 3 doctests** green across the core / exec-only / full configs.
 
 [Unreleased]: https://github.com/com-junkawasaki/aiueos/commits/main

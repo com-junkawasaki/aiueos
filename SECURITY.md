@@ -56,6 +56,13 @@ explicit grant, and that whatever does happen is **audited**.
 8. **Append-only audit.** Every grant, denial, compile and run is recorded as
    EDN — the same data model as everything else — so post-incident forensics and
    "who commanded the actuator, and why" are first-class.
+9. **Manifest authenticity (ed25519 signatures).** A manifest may carry an
+   `:aiueos/signature` over the canonical identity↔artifact binding
+   (`"<id>\n<wasm-sha256>"`), verified against the policy's `:aiueos/signers`
+   registry of trusted public keys. A valid signature elevates the component to
+   `:verified` and records the signer in the audit log (provenance); a forged or
+   unregistered signature is a hard denial — never downgraded to "unsigned". A
+   `:aiueos/require-signed` policy rejects unsigned components outright. (ADR-0003.)
 
 ## Per-surface notes
 
@@ -74,12 +81,13 @@ refuses to provide what that surface shouldn't.
 - **The TCB itself.** A bug in wasmtime, the host adapters, or the broker is
   game over. The TCB is small by design, but it is trusted, not verified — there
   is no formal proof yet.
-- **Manifest authenticity (signing).** A component's `:aiueos/wasm` artifact can
-  declare `:aiueos/wasm-sha256`, and the broker rejects the component if the
-  loaded bytes don't match — **integrity / tamper detection** for the artifact.
-  But manifests themselves are still **unsigned**: this proves the bytes match
-  the hash, not *who* authored them. Signatures, provenance, and CID-addressed
-  supply-chain integrity are planned, not present.
+- **Signing key lifecycle (rotation / revocation / expiry / chains).** Manifest
+  *authenticity* now exists — ed25519 signatures over the identity↔artifact
+  binding, verified against a trusted-signer registry (defense layer 9). What is
+  *not* yet present is the key **lifecycle**: the registry is a flat list with no
+  expiry, no revocation, and no certificate chains / delegation. A compromised
+  signer key can only be handled by editing the policy. CID-addressed
+  supply-chain integrity is also still future work.
 - **Wall-clock / IO DoS.** Fuel bounds CPU instructions and the page cap bounds
   memory, but a component can still issue many host calls; rate/quota limits on
   IO and a real-time scheduler are future work.

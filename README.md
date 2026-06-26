@@ -178,8 +178,15 @@ aiueos run     <manifest>.edn        [--policy p.edn] [--system s.edn] [--edn]
 aiueos compile <source.clj|manifest> [-o out.wasm]                   CLJ/Kotoba → wasm (kototama feature)
 aiueos check   <source.clj>                                          safe-kotoba subset gate
 aiueos hash    <file> [--edn]                                        sha256 for :aiueos/wasm-sha256
+aiueos sign    <manifest>.edn --key <hex-seed> [--edn]               ed25519-sign the (id, hash) binding
 aiueos audit   [--log <audit.edn>] [--event K] [--component C] [--edn]   replay/query the audit log
 ```
+
+**Authenticity (ADR-0003).** `aiueos hash` an artifact → set `:aiueos/wasm-sha256`
+→ `aiueos sign --key <seed>` → paste the `:aiueos/signature` and register the
+printed public key in the policy's `:aiueos/signers {:name "hex"}`. A valid
+signature elevates the component to `:verified`; `:aiueos/require-signed true`
+rejects any unsigned component. (Built with the default `signing` feature.)
 
 `--edn` (machine-readable) is accepted by `verify`/`inspect`/`up`/`run`/`audit`;
 `up --rounds N` runs a periodic control loop; `up --dry-run` validates without
@@ -232,6 +239,8 @@ Every recognized key — anything else in the `:aiueos/` namespace is rejected.
 | `:aiueos/source` | CLJ/Kotoba source path (compiled by kototama; monorepo feature) |
 | `:aiueos/wasm` | precompiled `.wasm` / `.wat` path (alternative to source) |
 | `:aiueos/wasm-sha256` | expected hex SHA-256 of the artifact — mismatch is rejected |
+| `:aiueos/signer` | key id of the signer vouching for this component (resolved via the policy `:aiueos/signers` registry) |
+| `:aiueos/signature` | hex ed25519 signature over `"<id>\n<wasm-sha256>"`; valid → trust elevated to `:verified`, forged → denied (ADR-0003) |
 | `:aiueos/imports` | capabilities needed (must resolve to a provider/kernel/grant) |
 | `:aiueos/exports` | capabilities provided to others |
 | `:aiueos/effects` | side effects (`:dma` `:network` `:device-io` …) — gated by trust/DMA rules |

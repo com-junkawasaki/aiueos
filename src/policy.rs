@@ -22,6 +22,8 @@ pub enum ViolationKind {
     /// A signed manifest whose signature is missing context, unregistered, or
     /// fails to verify (ADR-0003).
     BadSignature,
+    /// A component pinned to surfaces that don't include the active one (ADR-0005).
+    SurfaceMismatch,
 }
 
 impl ViolationKind {
@@ -31,6 +33,7 @@ impl ViolationKind {
             ViolationKind::ForbiddenEffect => "forbidden-effect",
             ViolationKind::DmaWithoutIommu => "dma-without-iommu",
             ViolationKind::BadSignature => "bad-signature",
+            ViolationKind::SurfaceMismatch => "surface-mismatch",
         }
     }
 }
@@ -65,6 +68,9 @@ pub struct Policy {
     /// (every component must carry a valid signature). Enforced under the
     /// `signing` feature.
     pub require_signed: bool,
+    /// `:aiueos/surface` — the active deployment surface (ADR-0005). A component
+    /// pinned to other surfaces is denied. `None` = unspecified (no surface gate).
+    pub surface: Option<String>,
 }
 
 impl Default for Policy {
@@ -107,6 +113,7 @@ impl Default for Policy {
             forbid_effects,
             signers: BTreeMap::new(),
             require_signed: false,
+            surface: None,
         }
     }
 }
@@ -126,6 +133,7 @@ impl Policy {
             "forbid",
             "signers",
             "require-signed",
+            "surface",
         ];
         if let Some(map) = v.as_map() {
             let mut unknown: Vec<String> = map
@@ -204,6 +212,13 @@ impl Policy {
                 ))
             }
         }
+        match edn::get(v, "aiueos", "surface") {
+            None => {}
+            Some(k) if k.as_keyword().is_some() => {
+                p.surface = k.as_keyword().map(|kw| kw.name().to_string())
+            }
+            Some(_) => return Err(Schema("policy: :aiueos/surface must be a keyword".into())),
+        }
         Ok(p)
     }
 
@@ -232,6 +247,21 @@ pub fn verify_component(
 ) -> std::result::Result<Grant, Vec<Violation>> {
     let mut violations = Vec::new();
     let granted = policy.granted_to(m);
+
+    // 0. Surface gate (ADR-0005): a component pinned to specific surfaces may only
+    //    run on the active one. Portable components (no :aiueos/surface) and an
+    //    unspecified active surface (no policy :aiueos/surface) skip the check.
+    if let (Some(active), Some(targets)) = (&policy.surface, &m.surfaces) {
+        if !targets.contains(active) {
+            violations.push(Violation {
+                component: m.id.clone(),
+                kind: ViolationKind::SurfaceMismatch,
+                message: format!(
+                    "component targets surfaces {targets:?} but the active surface is {active:?}"
+                ),
+            });
+        }
+    }
 
     // 1. Every import must resolve: exported by some component, a kernel cap, or
     //    an explicit grant.

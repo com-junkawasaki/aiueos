@@ -105,7 +105,8 @@ fn manifest_accepts_all_known_keys() {
             :aiueos/device {:bus :pci} :aiueos/publishes #{1} :aiueos/subscribes #{2}
             :aiueos/topics {:scan 1} :aiueos/signer "alice" :aiueos/signature "9c2e"
             :aiueos/quota {:host-calls 32 :publishes 4}
-            :aiueos/schedule {:period-ms 20 :priority 5 :cycle-ms 10}}"#,
+            :aiueos/schedule {:period-ms 20 :priority 5 :cycle-ms 10}
+            :aiueos/surface #{:robot}}"#,
     )
     .expect("all recognized keys parse");
     assert_eq!(m.id, "driver/full");
@@ -452,6 +453,45 @@ fn policy_forbid_overrides_a_trust_level() {
 }
 
 #[test]
+fn surface_gate_denies_a_mismatched_component() {
+    use aiueos::graph::CapabilityGraph;
+    use aiueos::policy::{self, ViolationKind};
+    let robot_policy =
+        Policy::from_edn(&kotoba_edn::parse("{:aiueos/surface :robot}").unwrap()).unwrap();
+    assert_eq!(robot_policy.surface.as_deref(), Some("robot"));
+
+    // a browser-targeted component on the robot surface → surface-mismatch denial
+    let browser = Manifest::parse_str(
+        "{:aiueos/component :app/b :aiueos/kind :app :aiueos/surface #{:browser :client}}",
+    )
+    .unwrap();
+    let g = CapabilityGraph::build(std::slice::from_ref(&browser));
+    let vs = policy::verify_component(&browser, &g, &robot_policy).expect_err("mismatch");
+    assert!(vs.iter().any(|v| v.kind == ViolationKind::SurfaceMismatch));
+
+    // a component that targets :robot is fine on the robot surface
+    let robot_app = Manifest::parse_str(
+        "{:aiueos/component :app/r :aiueos/kind :app :aiueos/surface #{:robot}}",
+    )
+    .unwrap();
+    let g2 = CapabilityGraph::build(std::slice::from_ref(&robot_app));
+    assert!(policy::verify_component(&robot_app, &g2, &robot_policy).is_ok());
+
+    // a portable component (no :aiueos/surface) runs on any surface
+    let portable = Manifest::parse_str("{:aiueos/component :app/p :aiueos/kind :app}").unwrap();
+    let g3 = CapabilityGraph::build(std::slice::from_ref(&portable));
+    assert!(policy::verify_component(&portable, &g3, &robot_policy).is_ok());
+}
+
+#[test]
+fn policy_rejects_non_keyword_surface() {
+    assert!(matches!(
+        Policy::from_edn(&kotoba_edn::parse(r#"{:aiueos/surface "robot"}"#).unwrap()),
+        Err(AiueosError::Schema(_))
+    ));
+}
+
+#[test]
 fn policy_rejects_unknown_trust_and_non_maps() {
     for bad in [
         // unknown trust in forbid → the lockdown would silently not apply
@@ -492,7 +532,8 @@ fn policy_accepts_all_known_keys() {
                 :aiueos/grants {:driver/x #{:iommu}}
                 :aiueos/forbid {:untrusted #{:secrets}}
                 :aiueos/signers {:alice "abcd"}
-                :aiueos/require-signed true}"#,
+                :aiueos/require-signed true
+                :aiueos/surface :cloud}"#,
         )
         .unwrap(),
     )
@@ -501,6 +542,7 @@ fn policy_accepts_all_known_keys() {
     assert!(p.grants.get("driver/x").unwrap().contains("iommu"));
     assert_eq!(p.signers.get("alice").map(String::as_str), Some("abcd"));
     assert!(p.require_signed);
+    assert_eq!(p.surface.as_deref(), Some("cloud"));
 }
 
 #[test]

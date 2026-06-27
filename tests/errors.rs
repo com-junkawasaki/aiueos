@@ -34,11 +34,12 @@ fn every_violation_kind_has_a_distinct_nonempty_label() {
         ViolationKind::ForbiddenEffect,
         ViolationKind::DmaWithoutIommu,
         ViolationKind::BadSignature,
+        ViolationKind::SurfaceMismatch,
     ];
     let labels: BTreeSet<&str> = kinds.iter().map(|k| k.label()).collect();
     assert_eq!(labels.len(), kinds.len(), "labels are distinct");
     assert!(labels.iter().all(|l| !l.is_empty()), "no blank label");
-    assert!(labels.contains("dma-without-iommu") && labels.contains("bad-signature"));
+    assert!(labels.contains("bad-signature") && labels.contains("surface-mismatch"));
 }
 
 #[test]

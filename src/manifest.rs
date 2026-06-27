@@ -32,6 +32,7 @@ const MANIFEST_KEYS: &[&str] = &[
     "signature",
     "quota",
     "schedule",
+    "surface",
 ];
 
 /// Parse `:aiueos/topics {:name id …}` (name→topic-id map). Absent → empty.
@@ -423,6 +424,9 @@ pub struct Manifest {
     pub quota: Quota,
     /// Per-component scheduling (`:aiueos/schedule`, ADR-0006). Defaulted when absent.
     pub schedule: Schedule,
+    /// Surfaces this component is built for (`:aiueos/surface`, ADR-0005). `None` =
+    /// portable (runs on any surface whose offered set covers its imports).
+    pub surfaces: Option<std::collections::BTreeSet<String>>,
 }
 
 impl Manifest {
@@ -565,6 +569,11 @@ impl Manifest {
             signature: edn::get_str(v, "aiueos", "signature"),
             quota,
             schedule,
+            surfaces: edn::get(v, "aiueos", "surface").map(|_| {
+                edn::kw_collection(edn::get(v, "aiueos", "surface"))
+                    .into_iter()
+                    .collect()
+            }),
         })
     }
 

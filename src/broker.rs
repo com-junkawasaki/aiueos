@@ -34,6 +34,19 @@ pub struct BootReport {
     pub launched: Vec<LaunchOutcome>,
 }
 
+/// The verdict of admitting an agent-submitted component (ADR-0004). A structured
+/// alternative to a `Result` so an agent loop can branch on *why* it was rejected.
+#[derive(Debug, Clone)]
+pub struct AdmitOutcome {
+    pub component: String,
+    /// Whether the component passed the gate and ran.
+    pub admitted: bool,
+    /// The entry's return value when admitted.
+    pub result: Option<i64>,
+    /// Why it was rejected (unsafe source, denial, or runtime trap), else `None`.
+    pub reason: Option<String>,
+}
+
 impl Broker {
     pub fn new(policy: Policy, audit: AuditLog) -> Broker {
         Broker { policy, audit }
@@ -146,6 +159,32 @@ impl Broker {
         let (result, _bus) =
             self.materialize_and_run(m, base, &grant.capabilities, TopicBus::new())?;
         Ok(result)
+    }
+
+    /// Code-as-data admission (ADR-0004): the front door for a component an AI
+    /// agent emitted at runtime. Identical to [`launch`](Self::launch) except the
+    /// submitted manifest's **trust is floored to `:ai-generated`** before
+    /// verification — agent code can never grant itself trust (a valid signature
+    /// can still *elevate* it, per ADR-0003). Returns a structured verdict rather
+    /// than an error, so an agent loop can read *why* a component was rejected and
+    /// regenerate.
+    #[cfg(feature = "wasm-runtime")]
+    pub fn admit(&self, m: &Manifest, base: &Path, graph: &CapabilityGraph) -> AdmitOutcome {
+        let floored = m.with_trust(crate::manifest::Trust::AiGenerated);
+        match self.launch(&floored, base, graph) {
+            Ok(result) => AdmitOutcome {
+                component: floored.id,
+                admitted: true,
+                result: Some(result),
+                reason: None,
+            },
+            Err(e) => AdmitOutcome {
+                component: floored.id,
+                admitted: false,
+                result: None,
+                reason: Some(e.to_string()),
+            },
+        }
     }
 
     /// Boot an entire system: link capabilities into a launch order, verify every

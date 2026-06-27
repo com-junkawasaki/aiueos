@@ -22,10 +22,19 @@
 
 use crate::error::{AiueosError, Result};
 use crate::topic::TopicBus;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use wasmtime::{
     Caller, Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, Val, ValType,
 };
+
+type KqeKey = (String, String, String);
+
+/// In-process KQE graph state threaded by the broker across component launches.
+/// Objects are raw CBOR/list<u8> bytes as exposed by the kotoba:kais ABI.
+#[derive(Debug, Clone, Default)]
+pub struct KqeStore {
+    quads: BTreeMap<KqeKey, Vec<Vec<u8>>>,
+}
 
 /// Returned by `poll` when a topic has never been published to.
 pub const EMPTY: i64 = i64::MIN;
@@ -127,6 +136,9 @@ pub struct HostCtx {
     /// (entry + args + caps) so distinct components draw *independent* streams
     /// rather than the same value at the same cycle.
     seed: u64,
+    /// KQE graph state for kotoba:kais host calls, threaded by the broker across
+    /// component launches like TopicBus.
+    kqe: KqeStore,
 }
 
 /// What a host-enabled run produced.
@@ -136,6 +148,8 @@ pub struct HostOutcome {
     pub host_calls: usize,
     /// The bus after this component ran — pass it to the next component.
     pub bus: TopicBus,
+    /// The KQE store after this component ran — pass it to the next component.
+    pub kqe: KqeStore,
 }
 
 fn run_err(e: impl std::fmt::Display) -> AiueosError {
@@ -149,6 +163,115 @@ fn gate(ctx: &HostCtx, cap: &str, what: &str) -> anyhow::Result<()> {
     } else {
         anyhow::bail!("capability `{cap}` not granted — host call `{what}` denied")
     }
+}
+
+fn gate_target(ctx: &HostCtx, prefix: &str, target: &str, what: &str) -> anyhow::Result<()> {
+    if ctx.caps.contains(&format!("{prefix}{target}")) || ctx.caps.contains(&format!("{prefix}*")) {
+        Ok(())
+    } else {
+        anyhow::bail!("capability `{prefix}{target}` not granted — host call `{what}` denied")
+    }
+}
+
+fn has_target(ctx: &HostCtx, prefix: &str, target: &str) -> bool {
+    ctx.caps.contains(&format!("{prefix}{target}")) || ctx.caps.contains(&format!("{prefix}*"))
+}
+
+fn gate_class(ctx: &HostCtx, prefix: &str, what: &str) -> anyhow::Result<()> {
+    if ctx
+        .caps
+        .iter()
+        .any(|cap| cap.strip_prefix(prefix).is_some())
+    {
+        Ok(())
+    } else {
+        anyhow::bail!("capability `{prefix}<target>` not granted — host call `{what}` denied")
+    }
+}
+
+fn memory(c: &mut Caller<'_, HostCtx>) -> anyhow::Result<wasmtime::Memory> {
+    c.get_export("memory")
+        .and_then(|e| e.into_memory())
+        .ok_or_else(|| anyhow::anyhow!("guest exports no memory"))
+}
+
+fn check_range(ptr: i32, len: i32) -> anyhow::Result<(usize, usize)> {
+    if ptr < 0 || len < 0 {
+        anyhow::bail!("negative guest pointer/length");
+    }
+    let start = ptr as usize;
+    let len = len as usize;
+    let end = start
+        .checked_add(len)
+        .ok_or_else(|| anyhow::anyhow!("guest pointer range overflow"))?;
+    Ok((start, end))
+}
+
+fn read_guest_bytes(c: &mut Caller<'_, HostCtx>, ptr: i32, len: i32) -> anyhow::Result<Vec<u8>> {
+    let (start, end) = check_range(ptr, len)?;
+    let mem = memory(c)?;
+    let data = mem.data(&mut *c);
+    if end > data.len() {
+        anyhow::bail!("guest memory read out of bounds");
+    }
+    Ok(data[start..end].to_vec())
+}
+
+fn read_guest_string(c: &mut Caller<'_, HostCtx>, ptr: i32, len: i32) -> anyhow::Result<String> {
+    let bytes = read_guest_bytes(c, ptr, len)?;
+    String::from_utf8(bytes).map_err(|e| anyhow::anyhow!("guest string is not utf-8: {e}"))
+}
+
+fn write_guest_bytes(c: &mut Caller<'_, HostCtx>, ptr: i32, bytes: &[u8]) -> anyhow::Result<()> {
+    let (start, end) = check_range(ptr, bytes.len() as i32)?;
+    let mem = memory(c)?;
+    let data = mem.data_mut(&mut *c);
+    if end > data.len() {
+        anyhow::bail!("guest memory write out of bounds");
+    }
+    data[start..end].copy_from_slice(bytes);
+    Ok(())
+}
+
+fn write_guest_u8(c: &mut Caller<'_, HostCtx>, ptr: i32, value: u8) -> anyhow::Result<()> {
+    write_guest_bytes(c, ptr, &[value])
+}
+
+fn write_guest_i32(c: &mut Caller<'_, HostCtx>, ptr: i32, value: i32) -> anyhow::Result<()> {
+    write_guest_bytes(c, ptr, &value.to_le_bytes())
+}
+
+fn guest_alloc(c: &mut Caller<'_, HostCtx>, len: usize, align: i32) -> anyhow::Result<i32> {
+    if len == 0 {
+        return Ok(0);
+    }
+    let realloc = c
+        .get_export("cabi_realloc")
+        .and_then(|e| e.into_func())
+        .ok_or_else(|| anyhow::anyhow!("guest exports no cabi_realloc"))?;
+    let mut results = [Val::I32(0)];
+    realloc.call(
+        &mut *c,
+        &[
+            Val::I32(0),
+            Val::I32(0),
+            Val::I32(align),
+            Val::I32(len as i32),
+        ],
+        &mut results,
+    )?;
+    match results[0] {
+        Val::I32(ptr) => Ok(ptr),
+        ref other => anyhow::bail!("cabi_realloc returned unexpected value {other:?}"),
+    }
+}
+
+fn guest_alloc_bytes(c: &mut Caller<'_, HostCtx>, bytes: &[u8]) -> anyhow::Result<i32> {
+    let ptr = guest_alloc(c, bytes.len(), 1)?;
+    if !bytes.is_empty() {
+        write_guest_bytes(c, ptr, bytes)?;
+    }
+    Ok(ptr)
 }
 
 /// Instantiate `wasm` (binary or WAT text) with the `aiueos:host` ABI bound, run
@@ -189,6 +312,35 @@ pub fn run_with_host_restricted(
     memory_pages: u32,
     caps: &BTreeSet<String>,
     bus: TopicBus,
+    topics: &TopicAccess,
+    quota: crate::manifest::Quota,
+) -> Result<HostOutcome> {
+    run_with_host_restricted_with_kqe(
+        wasm,
+        entry,
+        args,
+        fuel,
+        memory_pages,
+        caps,
+        bus,
+        KqeStore::default(),
+        topics,
+        quota,
+    )
+}
+
+/// Like [`run_with_host_restricted`], but also threads KQE graph state across
+/// component launches.
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_host_restricted_with_kqe(
+    wasm: &[u8],
+    entry: &str,
+    args: &[i64],
+    fuel: u64,
+    memory_pages: u32,
+    caps: &BTreeSet<String>,
+    bus: TopicBus,
+    kqe: KqeStore,
     topics: &TopicAccess,
     quota: crate::manifest::Quota,
 ) -> Result<HostOutcome> {
@@ -311,6 +463,199 @@ pub fn run_with_host_restricted(
             },
         )
         .map_err(run_err)?;
+    linker
+        .func_wrap(
+            "kotoba:kais/auth@0.1.0",
+            "has-capability",
+            |mut c: Caller<'_, HostCtx>,
+             resource_ptr: i32,
+             resource_len: i32,
+             ability_ptr: i32,
+             ability_len: i32|
+             -> anyhow::Result<i32> {
+                gate(c.data(), "kotoba.auth/self", "has-capability")?;
+                let resource = read_guest_string(&mut c, resource_ptr, resource_len)?;
+                let ability = read_guest_string(&mut c, ability_ptr, ability_len)?;
+                let d = c.data_mut();
+                charge(d, Charge::Call)?;
+                let cap = format!("{resource}/{ability}");
+                Ok((d.caps.contains(&cap) || d.caps.contains(&format!("{resource}/*"))) as i32)
+            },
+        )
+        .map_err(run_err)?;
+    linker
+        .func_wrap(
+            "kotoba:kais/kqe@0.1.0",
+            "assert-quad",
+            |mut c: Caller<'_, HostCtx>,
+             g_ptr: i32,
+             g_len: i32,
+             s_ptr: i32,
+             s_len: i32,
+             p_ptr: i32,
+             p_len: i32,
+             o_ptr: i32,
+             o_len: i32,
+             ret: i32|
+             -> anyhow::Result<()> {
+                let graph = read_guest_string(&mut c, g_ptr, g_len)?;
+                let subject = read_guest_string(&mut c, s_ptr, s_len)?;
+                let predicate = read_guest_string(&mut c, p_ptr, p_len)?;
+                let object = read_guest_bytes(&mut c, o_ptr, o_len)?;
+                gate_target(c.data(), "kotoba.graph-write/", &graph, "assert-quad")?;
+                let d = c.data_mut();
+                charge(d, Charge::Call)?;
+                d.kqe
+                    .quads
+                    .entry((graph, subject, predicate))
+                    .or_default()
+                    .push(object);
+                write_guest_u8(&mut c, ret, 0)
+            },
+        )
+        .map_err(run_err)?;
+    linker
+        .func_wrap(
+            "kotoba:kais/kqe@0.1.0",
+            "retract-quad",
+            |mut c: Caller<'_, HostCtx>,
+             g_ptr: i32,
+             g_len: i32,
+             s_ptr: i32,
+             s_len: i32,
+             p_ptr: i32,
+             p_len: i32,
+             o_ptr: i32,
+             o_len: i32,
+             ret: i32|
+             -> anyhow::Result<()> {
+                let graph = read_guest_string(&mut c, g_ptr, g_len)?;
+                let subject = read_guest_string(&mut c, s_ptr, s_len)?;
+                let predicate = read_guest_string(&mut c, p_ptr, p_len)?;
+                let object = read_guest_bytes(&mut c, o_ptr, o_len)?;
+                gate_target(c.data(), "kotoba.graph-write/", &graph, "retract-quad")?;
+                let d = c.data_mut();
+                charge(d, Charge::Call)?;
+                if let Some(objects) = d.kqe.quads.get_mut(&(graph, subject, predicate)) {
+                    objects.retain(|existing| existing != &object);
+                }
+                write_guest_u8(&mut c, ret, 0)
+            },
+        )
+        .map_err(run_err)?;
+    linker
+        .func_wrap(
+            "kotoba:kais/kqe@0.1.0",
+            "get-objects",
+            |mut c: Caller<'_, HostCtx>,
+             g_ptr: i32,
+             g_len: i32,
+             s_ptr: i32,
+             s_len: i32,
+             p_ptr: i32,
+             p_len: i32,
+             ret: i32|
+             -> anyhow::Result<()> {
+                let graph = read_guest_string(&mut c, g_ptr, g_len)?;
+                let subject = read_guest_string(&mut c, s_ptr, s_len)?;
+                let predicate = read_guest_string(&mut c, p_ptr, p_len)?;
+                gate_target(c.data(), "kotoba.graph-read/", &graph, "get-objects")?;
+                {
+                    let d = c.data_mut();
+                    charge(d, Charge::Call)?;
+                }
+                let objects = c
+                    .data()
+                    .kqe
+                    .quads
+                    .get(&(graph, subject, predicate))
+                    .cloned()
+                    .unwrap_or_default();
+                let array_ptr = guest_alloc(&mut c, objects.len() * 8, 4)?;
+                for (i, object) in objects.iter().enumerate() {
+                    let ptr = guest_alloc_bytes(&mut c, object)?;
+                    let base = array_ptr + (i * 8) as i32;
+                    write_guest_i32(&mut c, base, ptr)?;
+                    write_guest_i32(&mut c, base + 4, object.len() as i32)?;
+                }
+                write_guest_i32(&mut c, ret, array_ptr)?;
+                write_guest_i32(&mut c, ret + 4, objects.len() as i32)
+            },
+        )
+        .map_err(run_err)?;
+    linker
+        .func_wrap(
+            "kotoba:kais/kqe@0.1.0",
+            "query",
+            |mut c: Caller<'_, HostCtx>,
+             filter_ptr: i32,
+             filter_len: i32,
+             ret: i32|
+             -> anyhow::Result<()> {
+                let _filter = read_guest_string(&mut c, filter_ptr, filter_len)?;
+                gate_class(c.data(), "kotoba.graph-read/", "query")?;
+                {
+                    let d = c.data_mut();
+                    charge(d, Charge::Call)?;
+                }
+                let quads: Vec<(String, String, String, Vec<u8>)> = c
+                    .data()
+                    .kqe
+                    .quads
+                    .iter()
+                    .filter(|((graph, _, _), _)| has_target(c.data(), "kotoba.graph-read/", graph))
+                    .flat_map(|((graph, subject, predicate), objects)| {
+                        objects.iter().cloned().map(|object| {
+                            (graph.clone(), subject.clone(), predicate.clone(), object)
+                        })
+                    })
+                    .collect();
+                let array_ptr = guest_alloc(&mut c, quads.len() * 32, 4)?;
+                for (i, (graph, subject, predicate, object)) in quads.iter().enumerate() {
+                    let graph_ptr = guest_alloc_bytes(&mut c, graph.as_bytes())?;
+                    let subject_ptr = guest_alloc_bytes(&mut c, subject.as_bytes())?;
+                    let predicate_ptr = guest_alloc_bytes(&mut c, predicate.as_bytes())?;
+                    let object_ptr = guest_alloc_bytes(&mut c, object)?;
+                    let base = array_ptr + (i * 32) as i32;
+                    write_guest_i32(&mut c, base, graph_ptr)?;
+                    write_guest_i32(&mut c, base + 4, graph.len() as i32)?;
+                    write_guest_i32(&mut c, base + 8, subject_ptr)?;
+                    write_guest_i32(&mut c, base + 12, subject.len() as i32)?;
+                    write_guest_i32(&mut c, base + 16, predicate_ptr)?;
+                    write_guest_i32(&mut c, base + 20, predicate.len() as i32)?;
+                    write_guest_i32(&mut c, base + 24, object_ptr)?;
+                    write_guest_i32(&mut c, base + 28, object.len() as i32)?;
+                }
+                write_guest_u8(&mut c, ret, 0)?;
+                write_guest_i32(&mut c, ret + 4, array_ptr)?;
+                write_guest_i32(&mut c, ret + 8, quads.len() as i32)
+            },
+        )
+        .map_err(run_err)?;
+    linker
+        .func_wrap(
+            "kotoba:kais/llm@0.1.0",
+            "infer",
+            |mut c: Caller<'_, HostCtx>,
+             model_ptr: i32,
+             model_len: i32,
+             prompt_ptr: i32,
+             prompt_len: i32,
+             ret: i32|
+             -> anyhow::Result<()> {
+                let model = read_guest_string(&mut c, model_ptr, model_len)?;
+                let _prompt = read_guest_bytes(&mut c, prompt_ptr, prompt_len)?;
+                gate_target(c.data(), "kotoba.infer/", &model, "infer")?;
+                let d = c.data_mut();
+                charge(d, Charge::Call)?;
+                // No model provider is wired into aiueos yet. Return an ok empty
+                // payload so the ABI is executable without granting ambient LLM IO.
+                write_guest_u8(&mut c, ret, 0)?;
+                write_guest_i32(&mut c, ret + 4, 0)?;
+                write_guest_i32(&mut c, ret + 8, 0)
+            },
+        )
+        .map_err(run_err)?;
 
     let limits = StoreLimitsBuilder::new()
         .memory_size(memory_pages as usize * 64 * 1024)
@@ -325,6 +670,7 @@ pub fn run_with_host_restricted(
         quota,
         publishes: 0,
         seed: run_seed(entry, args, caps),
+        kqe,
     };
     let mut store = Store::new(&engine, ctx);
     store.limiter(|c| &mut c.limits);
@@ -373,5 +719,6 @@ pub fn run_with_host_restricted(
         logs: data.logs,
         host_calls: data.calls,
         bus: data.bus,
+        kqe: data.kqe,
     })
 }

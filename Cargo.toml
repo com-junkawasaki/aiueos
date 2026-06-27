@@ -14,13 +14,13 @@ path = "src/bin/aiueos.rs"
 # Git dependency so a standalone clone builds without the monorepo. Local dev can
 # override to the in-tree copy via .cargo/config.toml (paths override).
 kotoba-edn = { git = "https://github.com/com-junkawasaki/kotoba", branch = "main", package = "kotoba-edn" }
-# NOTE: the CLJ→wasm compiler `kototama` is intentionally NOT a dependency here.
-# Its own Cargo.toml uses path deps to sibling repos, so it cannot resolve in a
-# standalone clone (it breaks even `cargo build` via dependency resolution). The
-# `kototama` feature below is kept declared (so the `#[cfg(feature = "kototama")]`
-# compile-from-source code stays known and warning-free) but dormant; CLJ
-# compilation returns once kototama is published as a standalone crate, at which
-# point this becomes `kototama = { git = ... }` + `dep:kototama` in the feature.
+# CLJ/Kotoba source compiler. The feature is still named `kototama` for the
+# public aiueos surface, but the implementation is the maintained kotoba-clj
+# compiler crate. Optional so standalone users can keep the lightweight WAT/wasm
+# runtime without pulling the compiler. Git dependency (same as kotoba-edn) so a
+# standalone clone resolves it without a sibling checkout; local dev can override
+# to the in-tree copy via .cargo/config.toml (paths override).
+kotoba-clj = { git = "https://github.com/com-junkawasaki/kotoba", branch = "main", package = "kotoba-clj", default-features = false, optional = true }
 # Execution engine — the broker enforces fuel + memory-page limits here. Version
 # pinned to kotoba's workspace (22) so the build is shared, not duplicated.
 wasmtime = { version = "22", optional = true }
@@ -39,17 +39,15 @@ ed25519-dalek = { version = "2", optional = true }
 # `wasm-runtime` adds *execution*: instantiate wasm (binary or WAT) under fuel +
 # memory limits with the broker-mediated `aiueos:host` ABI. Needs only wasmtime.
 #
-# `kototama` adds *compilation* of CLJ/Kotoba source → wasm (pulls the kototama
-# toolchain) and implies `wasm-runtime` to run the result. Split out so the host
-# ABI / WAT components build and test without the CLJ compiler.
-# Default = execute wasm (binary/WAT). The CLJ compiler (`kototama`) is opt-in
-# because it only resolves inside the monorepo (path dep with sibling path deps).
+# `kototama` adds *compilation* of CLJ/Kotoba source → wasm (via kotoba-clj) and
+# implies `wasm-runtime` to run the result. Split out so the host ABI / WAT
+# components build and test without the CLJ compiler.
+# Default = execute wasm (binary/WAT). The CLJ compiler is opt-in because it
+# resolves via the sibling kotoba checkout in this monorepo layout.
 # `signing` adds ed25519 verification of signed manifests (ADR-0003). Pure crypto,
 # independent of the wasm runtime; on by default since authenticity is core to the
 # security model. The minimal core build (--no-default-features) omits it.
 default = ["wasm-runtime", "signing"]
 wasm-runtime = ["dep:wasmtime", "dep:anyhow", "dep:sha2"]
 signing = ["dep:ed25519-dalek"]
-# Dormant: declared so cfg gates are known, but adds no dependency (see note above).
-# Enabling it without the kototama crate present is unsupported (monorepo-only).
-kototama = ["wasm-runtime"]
+kototama = ["wasm-runtime", "dep:kotoba-clj"]

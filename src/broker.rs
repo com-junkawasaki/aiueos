@@ -8,7 +8,7 @@ use crate::graph::{CapabilityGraph, System};
 use crate::manifest::Manifest;
 use crate::policy::{self, Grant, Policy, Violation};
 #[cfg(feature = "wasm-runtime")]
-use crate::topic::TopicBus;
+use crate::{host::KqeStore, topic::TopicBus};
 #[cfg(feature = "wasm-runtime")]
 use std::path::Path;
 
@@ -159,8 +159,13 @@ impl Broker {
         // Capability gate (audits grant/deny internally). The conferred capability
         // set is what the host ABI enforces at call time — a fresh bus per run.
         let grant = self.verify_one(m, graph)?;
-        let (result, _bus) =
-            self.materialize_and_run(m, base, &grant.capabilities, TopicBus::new())?;
+        let (result, _bus, _kqe) = self.materialize_and_run(
+            m,
+            base,
+            &grant.capabilities,
+            TopicBus::new(),
+            KqeStore::default(),
+        )?;
         Ok(result)
     }
 
@@ -234,6 +239,7 @@ impl Broker {
         let topo_pos: std::collections::BTreeMap<usize, usize> =
             order.iter().enumerate().map(|(p, &i)| (i, p)).collect();
         let mut bus = TopicBus::new();
+        let mut kqe = KqeStore::default();
         let mut reports = Vec::with_capacity(rounds.max(1));
         for cycle in 0..rounds.max(1) {
             let mut launched = Vec::new();
@@ -266,8 +272,10 @@ impl Broker {
                     continue;
                 }
                 let caps = caps_of.get(&m.id).unwrap_or(&empty);
-                let (result, next_bus) = self.materialize_and_run(m, base, caps, bus)?;
+                let (result, next_bus, next_kqe) =
+                    self.materialize_and_run(m, base, caps, bus, kqe)?;
                 bus = next_bus;
+                kqe = next_kqe;
                 launched.push(LaunchOutcome {
                     component: m.id.clone(),
                     kind: m.kind.label(),
@@ -296,11 +304,12 @@ impl Broker {
         base: &Path,
         caps: &std::collections::BTreeSet<String>,
         bus: TopicBus,
-    ) -> Result<(i64, TopicBus)> {
+        kqe: KqeStore,
+    ) -> Result<(i64, TopicBus, KqeStore)> {
         // Obtain wasm: compile source (safe-checked, needs the kototama feature)
         // or load precompiled bytes / WAT text (`:aiueos/wasm`).
         let wasm: Vec<u8> = match (&m.source, &m.wasm) {
-            (Some(src_rel), _) => self.compile_component_source(m, base, src_rel)?,
+            (Some(src_rel), _) => self.compile_component_source(m, base, src_rel, caps)?,
             (None, Some(wasm_rel)) => {
                 let bytes = std::fs::read(base.join(wasm_rel))?;
                 if let Some(expected) = &m.wasm_sha256 {
@@ -335,7 +344,7 @@ impl Broker {
             publish: m.publishes.clone(),
             subscribe: m.subscribes.clone(),
         };
-        let outcome = match crate::host::run_with_host_restricted(
+        let outcome = match crate::host::run_with_host_restricted_with_kqe(
             &wasm,
             &m.entry,
             &m.args,
@@ -343,6 +352,7 @@ impl Broker {
             m.limits.memory_pages,
             caps,
             bus,
+            kqe,
             &topics,
             m.quota,
         ) {
@@ -366,25 +376,28 @@ impl Broker {
                 m.entry, m.args, outcome.result, outcome.host_calls
             ),
         )?;
-        Ok((outcome.result, outcome.bus))
+        Ok((outcome.result, outcome.bus, outcome.kqe))
     }
 
     /// Compile a component's `:aiueos/source` (safe-checked) to wasm. Requires the
-    /// `kototama` feature; without it, a source-based component cannot run.
+    /// `kototama` feature, which wires aiueos to the kotoba-clj compiler.
     #[cfg(feature = "kototama")]
     fn compile_component_source(
         &self,
         m: &Manifest,
         base: &Path,
         src_rel: &str,
+        caps: &std::collections::BTreeSet<String>,
     ) -> Result<Vec<u8>> {
-        let src = std::fs::read_to_string(base.join(src_rel))?;
+        let src_path = base.join(src_rel);
+        let src = std::fs::read_to_string(&src_path)?;
         if let Err(e) = crate::safe::check(&src) {
             self.audit
                 .append(Event::Reject, &m.id, &format!("unsafe source: {src_rel}"))?;
             return Err(e);
         }
-        let bytes = crate::runtime::compile_source(&src)?;
+        let policy = crate::runtime::kotoba_policy_from_caps(caps, m.limits);
+        let bytes = crate::runtime::compile_source_file_with_policy(&src_path, &policy)?;
         self.audit.append(
             Event::Compile,
             &m.id,
@@ -401,6 +414,7 @@ impl Broker {
         _m: &Manifest,
         _base: &Path,
         src_rel: &str,
+        _caps: &std::collections::BTreeSet<String>,
     ) -> Result<Vec<u8>> {
         Err(AiueosError::Run(format!(
             "compiling :aiueos/source ({src_rel}) requires the `kototama` feature; \

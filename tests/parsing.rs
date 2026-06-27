@@ -617,7 +617,7 @@ fn audit_round_trips_entries() {
 #[test]
 fn audit_records_every_event_kind() {
     // Each Event variant maps to its keyword — Compile/Reject are otherwise only
-    // hit on the dormant compile path / runtime traps.
+    // hit only on compile/run paths.
     let path = std::env::temp_dir().join("aiueos-audit-events.edn");
     let _ = std::fs::remove_file(&path);
     let log = AuditLog::new(&path);
@@ -674,6 +674,17 @@ fn safe_rejects_each_escape_hatch() {
         "(defn f [] (System/getenv))",
         "(defn f [] (java.net.Socket.))",
         "(defn f [] (load-string s))",
+        "(defn f [] (atom 0))",
+        "(defn f [a] (swap! a inc))",
+        "(defn f [] (rand-int 10))",
+        "(defn f [] (random-uuid))",
+        "(defn f [] (future (+ 1 1)))",
+        "(defn f [a b] (locking a b))",
+        r#"(defn f [] (println "hi"))"#,
+        "(defn f [] (read-line))",
+        "(defn f [x] (.toString x))",
+        "(defn f [] (String. \"x\"))",
+        "(defn f [] (new String \"x\"))",
     ] {
         assert!(
             matches!(safe::check(src), Err(AiueosError::Unsafe(_))),
@@ -704,6 +715,23 @@ fn safe_rejects_namespaced_host_static() {
 fn safe_does_not_flag_innocent_lookalikes() {
     // `javascript` and `systemd-thing` are not under any denied root.
     assert!(safe::check("(defn f [javascript systemic] (+ javascript systemic))").is_ok());
+}
+
+#[test]
+fn safe_treats_quote_var_and_comment_as_inert_data() {
+    // These forms are not executed. Scanning through them causes false positives
+    // and diverges from kotoba-clj's safe subset semantics.
+    assert!(safe::check("(defn f [] (quote (eval x)))").is_ok());
+    assert!(safe::check("(defn f [] (var eval))").is_ok());
+    assert!(safe::check("(comment (slurp \"/etc/passwd\") (System/exit 1))").is_ok());
+
+    assert!(
+        matches!(
+            safe::check("(defn f [] (do (quote (eval x)) (eval x)))"),
+            Err(AiueosError::Unsafe(_))
+        ),
+        "a real forbidden call remains denied even beside quoted data"
+    );
 }
 
 // ---------------------------------------------------------------------------

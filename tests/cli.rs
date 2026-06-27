@@ -811,8 +811,8 @@ fn run_a_host_importing_component() {
 }
 
 // ---------------------------------------------------------------------------
-// up / run / compile on the CLJ example system — needs the kototama compiler
-// (monorepo only); dormant in a standalone build.
+// up / run / compile on the CLJ example system — needs the kototama feature
+// (aiueos wired to the sibling kotoba-clj compiler).
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "kototama")]
@@ -872,6 +872,41 @@ fn compile_clj_writes_wasm_next_to_source() {
 
 #[cfg(feature = "kototama")]
 #[test]
+fn compile_kotoba_writes_wasm_next_to_source() {
+    let p = write(
+        "comp_src.kotoba",
+        "#!/usr/bin/env kotoba-clj\n(defn main [n] (+ n 1))",
+    );
+    let wasm = p.with_extension("wasm");
+    let _ = std::fs::remove_file(&wasm);
+    let (code, out, _e) = aiueos(&["compile", p.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(out.contains("compiled"));
+    let bytes = std::fs::read(&wasm).expect("wasm written next to source");
+    assert_eq!(&bytes[0..4], b"\0asm", "real wasm magic");
+    let _ = std::fs::remove_file(&wasm);
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn compile_cljc_honors_kotoba_reader_conditionals() {
+    let p = write(
+        "comp_cond.cljc",
+        r#"(defn main [n] #?(:kotoba (+ n 1) :clj (+ n 100) :default 0))"#,
+    );
+    let wasm = p.with_extension("wasm");
+    let _ = std::fs::remove_file(&wasm);
+    let (code, out, err) = aiueos(&["compile", p.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(out.contains("compiled"));
+    let bytes = std::fs::read(&wasm).expect("wasm written next to source");
+    let result = aiueos::runtime::run_wasm(&bytes, "main", &[41], 1_000_000, 64).unwrap();
+    assert_eq!(result, 42, "kotoba reader branch was selected");
+    let _ = std::fs::remove_file(&wasm);
+}
+
+#[cfg(feature = "kototama")]
+#[test]
 fn compile_honors_output_flag() {
     let p = write("comp_src2.clj", "(defn main [n] n)");
     let out_path = scratch("custom_out.wasm");
@@ -899,6 +934,192 @@ fn compile_rejects_unsafe_source_before_emitting() {
     assert!(
         !wasm.exists(),
         "no wasm emitted when the source is rejected"
+    );
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn compile_rejects_safe_clj_type_errors_before_emitting() {
+    let p = write("comp_type_bad.kotoba", r#"(defn main [] (+ "a" 1))"#);
+    let wasm = p.with_extension("wasm");
+    let _ = std::fs::remove_file(&wasm);
+    let (code, _o, err) = aiueos(&["compile", p.to_str().unwrap()]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("type error"),
+        "safe compiler should reject the type error, stderr: {err}"
+    );
+    assert!(!wasm.exists(), "no wasm emitted for rejected source");
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn run_kotoba_source_manifest_executes_to_42() {
+    let dir = std::env::temp_dir().join("aiueos-cli-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("source.kotoba"),
+        "#!/usr/bin/env kotoba-clj\n(defn main [n] (* n 2))",
+    )
+    .unwrap();
+    let manifest = dir.join("source.edn");
+    std::fs::write(
+        &manifest,
+        r#"{:aiueos/component :app/kotoba-src
+            :aiueos/kind :app
+            :aiueos/trust :untrusted
+            :aiueos/source "source.kotoba"
+            :aiueos/entry "main"
+            :aiueos/args [21]}"#,
+    )
+    .unwrap();
+    let (code, out, err) = aiueos(&["run", manifest.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(out.contains("= 42"), "stdout: {out}");
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn run_kotoba_source_manifest_binds_kqe_host_imports_from_policy() {
+    let dir = std::env::temp_dir().join("aiueos-cli-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("kqe_source.kotoba"),
+        r#"(defn main []
+             (if (kqe-assert! "kg" "alice" "kg/name" "v") 42 0))"#,
+    )
+    .unwrap();
+    let manifest = dir.join("kqe_source.edn");
+    std::fs::write(
+        &manifest,
+        r#"{:aiueos/component :app/kqe-src
+            :aiueos/kind :app
+            :aiueos/trust :untrusted
+            :aiueos/imports #{:kotoba.graph-write/kg}
+            :aiueos/source "kqe_source.kotoba"
+            :aiueos/entry "main"}"#,
+    )
+    .unwrap();
+    let policy = dir.join("kqe_policy.edn");
+    std::fs::write(
+        &policy,
+        r#"{:aiueos/grants {:app/kqe-src #{:kotoba.graph-write/kg}}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "run",
+        manifest.to_str().unwrap(),
+        "--policy",
+        policy.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(out.contains("= 42"), "stdout: {out}");
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn run_kotoba_kqe_source_without_policy_grant_is_denied() {
+    let dir = std::env::temp_dir().join("aiueos-cli-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("kqe_denied.kotoba"),
+        r#"(defn main []
+             (if (kqe-assert! "kg" "alice" "kg/name" "v") 42 0))"#,
+    )
+    .unwrap();
+    let manifest = dir.join("kqe_denied.edn");
+    std::fs::write(
+        &manifest,
+        r#"{:aiueos/component :app/kqe-denied
+            :aiueos/kind :app
+            :aiueos/imports #{:kotoba.graph-write/kg}
+            :aiueos/source "kqe_denied.kotoba"
+            :aiueos/entry "main"}"#,
+    )
+    .unwrap();
+
+    let (code, _out, err) = aiueos(&["run", manifest.to_str().unwrap()]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("unresolved-capability") && err.contains("kotoba.graph-write/kg"),
+        "stderr: {err}"
+    );
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn up_threads_kqe_store_between_kotoba_components() {
+    let dir = std::env::temp_dir().join("aiueos-cli-test-kqe-system");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("writer.kotoba"),
+        r#"(defn main []
+             (if (kqe-assert! "kg" "alice" "kg/name" "v") 1 0))"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("reader.kotoba"),
+        r#"(defn main []
+             (kqe-count (kqe-get-objects "kg" "alice" "kg/name")))"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("writer.edn"),
+        r#"{:aiueos/component :app/kqe-writer
+            :aiueos/kind :app
+            :aiueos/imports #{:kotoba.graph-write/kg}
+            :aiueos/exports #{:kotoba.graph-read/kg}
+            :aiueos/source "writer.kotoba"
+            :aiueos/entry "main"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("reader.edn"),
+        r#"{:aiueos/component :app/kqe-reader
+            :aiueos/kind :app
+            :aiueos/imports #{:kotoba.graph-read/kg}
+            :aiueos/source "reader.kotoba"
+            :aiueos/entry "main"}"#,
+    )
+    .unwrap();
+    let system = dir.join("system.aiueos.edn");
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :kqe-flow
+            :aiueos/components ["writer.edn" "reader.edn"]}"#,
+    )
+    .unwrap();
+    let policy = dir.join("policy.edn");
+    std::fs::write(
+        &policy,
+        r#"{:aiueos/grants {:app/kqe-writer #{:kotoba.graph-write/kg}}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "up",
+        system.to_str().unwrap(),
+        "--policy",
+        policy.to_str().unwrap(),
+        "--edn",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid EDN");
+    let launched = aiueos::edn::get(&v, "aiueos", "launched")
+        .and_then(|x| x.as_vector())
+        .expect("launched vector");
+    let reader = launched
+        .iter()
+        .find(|c| {
+            aiueos::edn::get_bare(c, "component").and_then(|x| x.as_string())
+                == Some("app/kqe-reader")
+        })
+        .expect("reader launched");
+    assert_eq!(
+        aiueos::edn::get_bare(reader, "result").and_then(|x| x.as_integer()),
+        Some(1),
+        "reader sees writer's KQE assertion"
     );
 }
 

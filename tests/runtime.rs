@@ -1,11 +1,13 @@
 //! Integration tests for the execution seam (feature `wasm-runtime`): the
 //! broker-conferred fuel + memory limits must actually be enforced, and a real
-//! module must run. Uses WAT directly so the tests don't need the (dormant)
-//! kototama CLJ compiler — they run in a standalone clone.
+//! module must run. Uses WAT directly so the tests don't need the kototama
+//! feature / kotoba-clj compiler — they run in the lightweight default build.
 
 #![cfg(feature = "wasm-runtime")]
 
 use aiueos::runtime;
+#[cfg(feature = "kototama")]
+use std::collections::BTreeSet;
 
 // doubles its i64 arg; exports a 1-page linear memory.
 const DOUBLE: &str = r#"(module
@@ -51,4 +53,36 @@ fn memory_cap_is_enforced() {
 #[test]
 fn missing_entry_function_is_a_run_error() {
     assert!(runtime::run_wasm(DOUBLE.as_bytes(), "nonexistent", &[1], 10_000, 16).is_err());
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn kotoba_policy_from_caps_grants_exact_graph_write() {
+    let src = r#"(defn run [] (kqe-assert! "kg" "alice" "kg/name" "v"))"#;
+    let mut caps = BTreeSet::new();
+    caps.insert("kotoba.graph-write/kg".to_string());
+    let policy = runtime::kotoba_policy_from_caps(&caps, aiueos::manifest::Limits::default());
+
+    let wasm = runtime::compile_source_with_policy(src, &policy)
+        .expect("matching graph-write grant should compile");
+    assert_eq!(&wasm[..4], b"\0asm");
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn kotoba_policy_from_caps_rejects_ungranted_graph_write() {
+    let src = r#"(defn run [] (kqe-assert! "kg" "alice" "kg/name" "v"))"#;
+
+    let deny_all =
+        runtime::kotoba_policy_from_caps(&BTreeSet::new(), aiueos::manifest::Limits::default());
+    let err = runtime::compile_source_with_policy(src, &deny_all)
+        .expect_err("deny-all must reject graph-write");
+    assert!(err.to_string().contains("graph-write"));
+
+    let mut caps = BTreeSet::new();
+    caps.insert("kotoba.graph-write/other".to_string());
+    let wrong_graph = runtime::kotoba_policy_from_caps(&caps, aiueos::manifest::Limits::default());
+    let err = runtime::compile_source_with_policy(src, &wrong_graph)
+        .expect_err("wrong graph cid must reject graph-write");
+    assert!(err.to_string().contains("kg"));
 }

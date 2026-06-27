@@ -160,6 +160,7 @@ fn per_topic_restriction_confines_publishes() {
         &caps(&["topic/publish"]),
         TopicBus::new(),
         &allow_1,
+        aiueos::manifest::Quota::default(),
     )
     .is_ok());
 
@@ -178,6 +179,7 @@ fn per_topic_restriction_confines_publishes() {
         &caps(&["topic/publish"]),
         TopicBus::new(),
         &allow_2,
+        aiueos::manifest::Quota::default(),
     )
     .is_err());
 }
@@ -223,6 +225,66 @@ fn random_is_decorrelated_across_distinct_components() {
         a.result, b.result,
         "distinct components get independent streams"
     );
+}
+
+#[test]
+fn host_call_quota_traps_over_budget() {
+    use aiueos::host::{run_with_host_restricted, TopicAccess};
+    use aiueos::manifest::Quota;
+    // LOG_TWICE makes 2 log calls. A quota of 1 host-call/cycle → the 2nd traps;
+    // a quota of 2 lets both through.
+    let run_q = |q: Quota| {
+        run_with_host_restricted(
+            LOG_TWICE.as_bytes(),
+            "run",
+            &[10],
+            1_000_000,
+            1,
+            &caps(&["log/write"]),
+            TopicBus::new(),
+            &TopicAccess::unrestricted(),
+            q,
+        )
+    };
+    assert!(
+        run_q(Quota {
+            host_calls: 1,
+            publishes: 256
+        })
+        .is_err(),
+        "the 2nd host call exceeds a quota of 1 → traps"
+    );
+    assert!(
+        run_q(Quota {
+            host_calls: 2,
+            publishes: 256
+        })
+        .is_ok(),
+        "a quota of 2 admits both calls"
+    );
+}
+
+#[test]
+fn publish_quota_traps_independently() {
+    use aiueos::host::{run_with_host_restricted, TopicAccess};
+    use aiueos::manifest::Quota;
+    // PUBLISH_TWICE_COUNT publishes twice. A publish budget of 1 → the 2nd
+    // publish traps even with host-call budget to spare.
+    let r = run_with_host_restricted(
+        PUBLISH_TWICE_COUNT.as_bytes(),
+        "run",
+        &[],
+        1_000_000,
+        1,
+        &caps(&["topic/publish", "topic/subscribe"]),
+        TopicBus::new(),
+        &TopicAccess::unrestricted(),
+        Quota {
+            host_calls: 1024,
+            publishes: 1,
+        },
+    );
+    assert!(r.is_err(), "2nd publish exceeds the publish quota → traps");
 }
 
 #[test]

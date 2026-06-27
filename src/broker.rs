@@ -324,6 +324,7 @@ impl Broker {
             caps,
             bus,
             &topics,
+            m.quota,
         ) {
             Ok(o) => o,
             Err(e) => {

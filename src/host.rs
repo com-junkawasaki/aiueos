@@ -74,6 +74,34 @@ fn run_seed(entry: &str, args: &[i64], caps: &BTreeSet<String>) -> u64 {
     h
 }
 
+/// What a host call costs against the per-cycle quota (ADR-0006).
+enum Charge {
+    /// An ordinary gated host call.
+    Call,
+    /// A `publish`, which also draws on the separate publish budget.
+    Publish,
+}
+
+/// Charge one host call against the component's per-cycle quota, trapping if the
+/// budget is exhausted — so an over-quota call fails exactly like an ungranted
+/// capability or an undeclared topic. Increments the call counter.
+fn charge(ctx: &mut HostCtx, kind: Charge) -> anyhow::Result<()> {
+    ctx.calls += 1;
+    if ctx.calls as u64 > ctx.quota.host_calls {
+        anyhow::bail!(
+            "host-call quota exceeded ({} per cycle)",
+            ctx.quota.host_calls
+        );
+    }
+    if matches!(kind, Charge::Publish) {
+        ctx.publishes += 1;
+        if ctx.publishes > ctx.quota.publishes {
+            anyhow::bail!("publish quota exceeded ({} per cycle)", ctx.quota.publishes);
+        }
+    }
+    Ok(())
+}
+
 /// splitmix64 — a fast, well-distributed mixing function. Used to make `random()`
 /// deterministic-yet-varied from a seed (reproducible Phase-0 randomness).
 fn splitmix64(seed: u64) -> u64 {
@@ -92,6 +120,9 @@ pub struct HostCtx {
     bus: TopicBus,
     logs: Vec<i64>,
     calls: usize,
+    /// Per-cycle host-call quota (ADR-0006) and the publish sub-counter.
+    quota: crate::manifest::Quota,
+    publishes: u64,
     /// Per-run base seed for `random()` — derived from the run signature
     /// (entry + args + caps) so distinct components draw *independent* streams
     /// rather than the same value at the same cycle.
@@ -142,6 +173,7 @@ pub fn run_with_host(
         caps,
         bus,
         &TopicAccess::unrestricted(),
+        crate::manifest::Quota::default(),
     )
 }
 
@@ -158,6 +190,7 @@ pub fn run_with_host_restricted(
     caps: &BTreeSet<String>,
     bus: TopicBus,
     topics: &TopicAccess,
+    quota: crate::manifest::Quota,
 ) -> Result<HostOutcome> {
     let mut config = Config::new();
     config.consume_fuel(true);
@@ -173,8 +206,8 @@ pub fn run_with_host_restricted(
             |mut c: Caller<'_, HostCtx>, v: i64| -> anyhow::Result<()> {
                 gate(c.data(), "log/write", "log")?;
                 let d = c.data_mut();
+                charge(d, Charge::Call)?;
                 d.logs.push(v);
-                d.calls += 1;
                 Ok(())
             },
         )
@@ -185,9 +218,9 @@ pub fn run_with_host_restricted(
             "clock",
             |mut c: Caller<'_, HostCtx>| -> anyhow::Result<i64> {
                 gate(c.data(), "clock/monotonic", "clock")?;
-                let tick = c.data().bus.tick() as i64;
-                c.data_mut().calls += 1;
-                Ok(tick) // monotonic control-loop cycle (Phase-0 clock stand-in)
+                let d = c.data_mut();
+                charge(d, Charge::Call)?;
+                Ok(d.bus.tick() as i64) // monotonic control-loop cycle (Phase-0 stand-in)
             },
         )
         .map_err(run_err)?;
@@ -203,11 +236,12 @@ pub fn run_with_host_restricted(
                 // (Phase-0 determinism); distinct components → independent streams.
                 // NOT a CSPRNG — predictable; never use for keys/nonces/secrets.
                 let d = c.data_mut();
+                // seed uses the pre-charge call index (unchanged determinism)
                 let mixed = d
                     .seed
                     .wrapping_add(d.bus.tick().wrapping_mul(0x9E37_79B9_7F4A_7C15))
                     .wrapping_add(d.calls as u64);
-                d.calls += 1;
+                charge(d, Charge::Call)?;
                 Ok(splitmix64(mixed) as i64)
             },
         )
@@ -222,8 +256,8 @@ pub fn run_with_host_restricted(
                     anyhow::bail!("topic {topic} not in this component's :aiueos/publishes set");
                 }
                 let d = c.data_mut();
+                charge(d, Charge::Publish)?;
                 d.bus.publish(topic, value);
-                d.calls += 1;
                 Ok(())
             },
         )
@@ -237,9 +271,9 @@ pub fn run_with_host_restricted(
                 if !topic_ok(&c.data().topics.subscribe, topic) {
                     anyhow::bail!("topic {topic} not in this component's :aiueos/subscribes set");
                 }
-                let v = c.data().bus.latest(topic).unwrap_or(EMPTY);
-                c.data_mut().calls += 1;
-                Ok(v)
+                let d = c.data_mut();
+                charge(d, Charge::Call)?;
+                Ok(d.bus.latest(topic).unwrap_or(EMPTY))
             },
         )
         .map_err(run_err)?;
@@ -254,9 +288,9 @@ pub fn run_with_host_restricted(
                 if !topic_ok(&c.data().topics.subscribe, topic) {
                     anyhow::bail!("topic {topic} not in this component's :aiueos/subscribes set");
                 }
-                let n = c.data().bus.count(topic) as i64;
-                c.data_mut().calls += 1;
-                Ok(n)
+                let d = c.data_mut();
+                charge(d, Charge::Call)?;
+                Ok(d.bus.count(topic) as i64)
             },
         )
         .map_err(run_err)?;
@@ -272,9 +306,8 @@ pub fn run_with_host_restricted(
                     anyhow::bail!("topic {topic} not in this component's :aiueos/subscribes set");
                 }
                 let d = c.data_mut();
-                let v = d.bus.take(topic).unwrap_or(EMPTY);
-                d.calls += 1;
-                Ok(v)
+                charge(d, Charge::Call)?;
+                Ok(d.bus.take(topic).unwrap_or(EMPTY))
             },
         )
         .map_err(run_err)?;
@@ -289,6 +322,8 @@ pub fn run_with_host_restricted(
         bus,
         logs: Vec::new(),
         calls: 0,
+        quota,
+        publishes: 0,
         seed: run_seed(entry, args, caps),
     };
     let mut store = Store::new(&engine, ctx);

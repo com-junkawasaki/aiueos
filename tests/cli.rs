@@ -811,8 +811,8 @@ fn run_a_host_importing_component() {
 }
 
 // ---------------------------------------------------------------------------
-// up / run / compile on the CLJ example system — needs the kototama compiler
-// (monorepo only); dormant in a standalone build.
+// up / run / compile on the CLJ example system — needs the kototama feature
+// (aiueos wired to the sibling kotoba-clj compiler).
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "kototama")]
@@ -872,6 +872,41 @@ fn compile_clj_writes_wasm_next_to_source() {
 
 #[cfg(feature = "kototama")]
 #[test]
+fn compile_kotoba_writes_wasm_next_to_source() {
+    let p = write(
+        "comp_src.kotoba",
+        "#!/usr/bin/env kotoba-clj\n(defn main [n] (+ n 1))",
+    );
+    let wasm = p.with_extension("wasm");
+    let _ = std::fs::remove_file(&wasm);
+    let (code, out, _e) = aiueos(&["compile", p.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(out.contains("compiled"));
+    let bytes = std::fs::read(&wasm).expect("wasm written next to source");
+    assert_eq!(&bytes[0..4], b"\0asm", "real wasm magic");
+    let _ = std::fs::remove_file(&wasm);
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn compile_cljc_honors_kotoba_reader_conditionals() {
+    let p = write(
+        "comp_cond.cljc",
+        r#"(defn main [n] #?(:kotoba (+ n 1) :clj (+ n 100) :default 0))"#,
+    );
+    let wasm = p.with_extension("wasm");
+    let _ = std::fs::remove_file(&wasm);
+    let (code, out, err) = aiueos(&["compile", p.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(out.contains("compiled"));
+    let bytes = std::fs::read(&wasm).expect("wasm written next to source");
+    let result = aiueos::runtime::run_wasm(&bytes, "main", &[41], 1_000_000, 64).unwrap();
+    assert_eq!(result, 42, "kotoba reader branch was selected");
+    let _ = std::fs::remove_file(&wasm);
+}
+
+#[cfg(feature = "kototama")]
+#[test]
 fn compile_honors_output_flag() {
     let p = write("comp_src2.clj", "(defn main [n] n)");
     let out_path = scratch("custom_out.wasm");
@@ -900,6 +935,47 @@ fn compile_rejects_unsafe_source_before_emitting() {
         !wasm.exists(),
         "no wasm emitted when the source is rejected"
     );
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn compile_rejects_safe_clj_type_errors_before_emitting() {
+    let p = write("comp_type_bad.kotoba", r#"(defn main [] (+ "a" 1))"#);
+    let wasm = p.with_extension("wasm");
+    let _ = std::fs::remove_file(&wasm);
+    let (code, _o, err) = aiueos(&["compile", p.to_str().unwrap()]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("type error"),
+        "safe compiler should reject the type error, stderr: {err}"
+    );
+    assert!(!wasm.exists(), "no wasm emitted for rejected source");
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn run_kotoba_source_manifest_executes_to_42() {
+    let dir = std::env::temp_dir().join("aiueos-cli-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("source.kotoba"),
+        "#!/usr/bin/env kotoba-clj\n(defn main [n] (* n 2))",
+    )
+    .unwrap();
+    let manifest = dir.join("source.edn");
+    std::fs::write(
+        &manifest,
+        r#"{:aiueos/component :app/kotoba-src
+            :aiueos/kind :app
+            :aiueos/trust :untrusted
+            :aiueos/source "source.kotoba"
+            :aiueos/entry "main"
+            :aiueos/args [21]}"#,
+    )
+    .unwrap();
+    let (code, out, err) = aiueos(&["run", manifest.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(out.contains("= 42"), "stdout: {out}");
 }
 
 #[cfg(feature = "kototama")]

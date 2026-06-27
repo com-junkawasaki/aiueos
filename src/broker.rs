@@ -370,7 +370,7 @@ impl Broker {
     }
 
     /// Compile a component's `:aiueos/source` (safe-checked) to wasm. Requires the
-    /// `kototama` feature; without it, a source-based component cannot run.
+    /// `kototama` feature, which wires aiueos to the kotoba-clj compiler.
     #[cfg(feature = "kototama")]
     fn compile_component_source(
         &self,
@@ -378,13 +378,14 @@ impl Broker {
         base: &Path,
         src_rel: &str,
     ) -> Result<Vec<u8>> {
-        let src = std::fs::read_to_string(base.join(src_rel))?;
+        let src_path = base.join(src_rel);
+        let src = std::fs::read_to_string(&src_path)?;
         if let Err(e) = crate::safe::check(&src) {
             self.audit
                 .append(Event::Reject, &m.id, &format!("unsafe source: {src_rel}"))?;
             return Err(e);
         }
-        let bytes = crate::runtime::compile_source(&src)?;
+        let bytes = crate::runtime::compile_source_file(&src_path)?;
         self.audit.append(
             Event::Compile,
             &m.id,

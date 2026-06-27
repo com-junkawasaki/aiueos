@@ -29,7 +29,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ed25519-dalek",
- "kotoba-edn",
+ "kotoba-clj",
+ "kotoba-edn 0.1.0 (git+https://github.com/com-junkawasaki/kotoba?branch=main)",
  "sha2",
  "wasmtime",
 ]
@@ -686,6 +687,23 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kotoba-clj"
+version = "0.1.0"
+dependencies = [
+ "kotoba-edn 0.1.0",
+ "thiserror 1.0.69",
+ "wasm-encoder 0.221.3",
+]
+
+[[package]]
+name = "kotoba-edn"
+version = "0.1.0"
+dependencies = [
+ "ordered-float",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1348,6 +1366,16 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
+version = "0.221.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc8444fe4920de80a4fe5ab564fff2ae58b6b73166b89751f8c6c93509da32e5"
+dependencies = [
+ "leb128",
+ "wasmparser 0.221.3",
+]
+
+[[package]]
+name = "wasm-encoder"
 version = "0.252.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8185ae345fa5687c054626ff9a50e7089797a343d9904d1dc9820eb4c4d3196f"
@@ -1368,6 +1396,17 @@ dependencies = [
  "indexmap",
  "semver",
  "serde",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.221.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d06bfa36ab3ac2be0dee563380147a5b81ba10dd8885d7fbbc9eb574be67d185"
+dependencies = [
+ "bitflags",
+ "indexmap",
+ "semver",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 //! Integration tests for the execution seam (feature `wasm-runtime`): the
 //! broker-conferred fuel + memory limits must actually be enforced, and a real
-//! module must run. Uses WAT directly so the tests don't need the (dormant)
-//! kototama CLJ compiler — they run in a standalone clone.
+//! module must run. Uses WAT directly so the tests don't need the kototama
+//! feature / kotoba-clj compiler — they run in the lightweight default build.
 
 #![cfg(feature = "wasm-runtime")]
 

@@ -756,7 +756,7 @@ fn cmd_compile(args: &[String]) -> aiueos::Result<()> {
         };
 
         aiueos::safe::check(&src)?;
-        let wasm = aiueos::runtime::compile_source(&src)?;
+        let wasm = aiueos::runtime::compile_source_file(&src_path)?;
         let out = flag(args, "-o")
             .or_else(|| flag(args, "--out"))
             .map(PathBuf::from)

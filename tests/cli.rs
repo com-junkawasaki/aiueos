@@ -435,6 +435,28 @@ fn hash_prints_sha256_matching_the_library() {
 
 #[cfg(feature = "wasm-runtime")]
 #[test]
+fn run_executes_a_component_and_emits_edn() {
+    // The robot sensor launches standalone (imports only the kernel topic cap) and
+    // returns 21. Exercises the `run` CLI surface end-to-end, human and --edn.
+    let (code, out, _e) = aiueos(&["run", "examples/robot/sensor.edn"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("driver/sensor"));
+
+    let (code, out, _e) = aiueos(&["run", "examples/robot/sensor.edn", "--edn"]);
+    assert_eq!(code, 0);
+    let v = kotoba_edn::parse(out.trim()).expect("valid EDN");
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "component").and_then(|x| x.as_string()),
+        Some("driver/sensor")
+    );
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "result").and_then(|x| x.as_integer()),
+        Some(21)
+    );
+}
+
+#[cfg(feature = "wasm-runtime")]
+#[test]
 fn hash_missing_file_errors() {
     let (code, _o, _e) = aiueos(&["hash", "/no/such/artifact.wasm"]);
     assert_eq!(code, 1);

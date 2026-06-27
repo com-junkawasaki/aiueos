@@ -103,13 +103,16 @@ fn manifest_accepts_all_known_keys() {
             :aiueos/effects #{:dma} :aiueos/requires #{:iommu}
             :aiueos/limits {:memory-pages 8 :fuel 99} :aiueos/entry "go" :aiueos/args [1 2]
             :aiueos/device {:bus :pci} :aiueos/publishes #{1} :aiueos/subscribes #{2}
-            :aiueos/topics {:scan 1} :aiueos/signer "alice" :aiueos/signature "9c2e"}"#,
+            :aiueos/topics {:scan 1} :aiueos/signer "alice" :aiueos/signature "9c2e"
+            :aiueos/quota {:host-calls 32 :publishes 4}}"#,
     )
     .expect("all recognized keys parse");
     assert_eq!(m.id, "driver/full");
     assert_eq!(m.topics.get("scan"), Some(&1));
     assert_eq!(m.signer.as_deref(), Some("alice"));
     assert_eq!(m.signature.as_deref(), Some("9c2e"));
+    assert_eq!(m.quota.host_calls, 32);
+    assert_eq!(m.quota.publishes, 4);
     assert_eq!(m.args, vec![1, 2]);
     assert_eq!(m.wasm_sha256.as_deref(), Some("abc"));
     assert!(m.publishes.unwrap().contains(&1));
@@ -240,6 +243,40 @@ fn publishes_subscribes_derived_from_named_topics() {
     .unwrap();
     assert_eq!(m.publishes.unwrap(), [1].into_iter().collect());
     assert_eq!(m.subscribes.unwrap(), [2].into_iter().collect());
+}
+
+#[test]
+fn quota_defaults_when_absent_and_parses_when_present() {
+    // absent → generous defaults (existing components unaffected)
+    let d = Manifest::parse_str("{:aiueos/component :a/x :aiueos/kind :app}").unwrap();
+    assert_eq!(d.quota.host_calls, 1024);
+    assert_eq!(d.quota.publishes, 256);
+    // present → the declared per-cycle caps
+    let m = Manifest::parse_str(
+        "{:aiueos/component :a/x :aiueos/kind :app :aiueos/quota {:host-calls 8 :publishes 2}}",
+    )
+    .unwrap();
+    assert_eq!(m.quota.host_calls, 8);
+    assert_eq!(m.quota.publishes, 2);
+}
+
+#[test]
+fn manifest_rejects_malformed_quota() {
+    for bad in [
+        // not a map
+        "{:aiueos/component :a/x :aiueos/kind :app :aiueos/quota 5}",
+        // unknown sub-key (typo)
+        "{:aiueos/component :a/x :aiueos/kind :app :aiueos/quota {:host-cals 8}}",
+        // non-integer value
+        r#"{:aiueos/component :a/x :aiueos/kind :app :aiueos/quota {:host-calls "lots"}}"#,
+        // zero host-calls (a component that can't make one call is nonsense)
+        "{:aiueos/component :a/x :aiueos/kind :app :aiueos/quota {:host-calls 0}}",
+    ] {
+        assert!(
+            matches!(Manifest::parse_str(bad), Err(AiueosError::Schema(_))),
+            "should reject: {bad}"
+        );
+    }
 }
 
 #[test]

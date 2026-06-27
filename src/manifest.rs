@@ -30,6 +30,7 @@ const MANIFEST_KEYS: &[&str] = &[
     "topics",
     "signer",
     "signature",
+    "quota",
 ];
 
 /// Parse `:aiueos/topics {:name id …}` (name→topic-id map). Absent → empty.
@@ -260,6 +261,58 @@ impl Default for Limits {
     }
 }
 
+/// Per-cycle host-call rate caps (`:aiueos/quota`, ADR-0006). Defaults are
+/// generous so existing components are unaffected; deny-by-default applies to
+/// *capabilities*, not call counts.
+#[derive(Debug, Clone, Copy)]
+pub struct Quota {
+    /// Total gated host calls allowed per cycle (per `materialize_and_run`).
+    pub host_calls: u64,
+    /// Of those, the maximum that may be `publish`.
+    pub publishes: u64,
+}
+
+impl Default for Quota {
+    fn default() -> Self {
+        Quota {
+            host_calls: 1024,
+            publishes: 256,
+        }
+    }
+}
+
+/// Recognized `:aiueos/quota` sub-keys — any other is a typo and rejected.
+const QUOTA_KEYS: &[&str] = &["host-calls", "publishes"];
+
+/// Parse `:aiueos/quota {:host-calls N :publishes N}`. Absent → defaults. A
+/// non-integer, out-of-range, or unknown sub-key is a hard error (fail loud).
+fn parse_quota(v: &EdnValue, id: &str) -> Result<Quota> {
+    let d = Quota::default();
+    let q = match edn::get(v, "aiueos", "quota") {
+        None => return Ok(d),
+        Some(EdnValue::Map(_)) => edn::get(v, "aiueos", "quota").unwrap(),
+        Some(_) => {
+            return Err(AiueosError::Schema(format!(
+                "{id}: :aiueos/quota must be a map"
+            )))
+        }
+    };
+    if let EdnValue::Map(m) = q {
+        for (k, _) in m {
+            let name = k.as_keyword().map(|kw| kw.name()).unwrap_or("");
+            if !QUOTA_KEYS.contains(&name) {
+                return Err(AiueosError::Schema(format!(
+                    "{id}: unknown :aiueos/quota key :{name}"
+                )));
+            }
+        }
+    }
+    Ok(Quota {
+        host_calls: read_limit(q, "host-calls", id, 1, i64::MAX, d.host_calls as i64)? as u64,
+        publishes: read_limit(q, "publishes", id, 0, i64::MAX, d.publishes as i64)? as u64,
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct Manifest {
     /// Canonical id, e.g. `driver/virtio-blk`.
@@ -301,6 +354,8 @@ pub struct Manifest {
     pub signer: Option<String>,
     /// Hex ed25519 signature (`:aiueos/signature`) over [`Manifest::signed_message`].
     pub signature: Option<String>,
+    /// Per-cycle host-call rate caps (`:aiueos/quota`, ADR-0006). Defaulted when absent.
+    pub quota: Quota,
 }
 
 impl Manifest {
@@ -367,6 +422,7 @@ impl Manifest {
             }
             None => Limits::default(),
         };
+        let quota = parse_quota(v, &id)?;
 
         // `:aiueos/args` must be a vector of integers (the i64 args passed to the
         // entry). Silently dropping a non-integer element or ignoring a non-vector
@@ -439,6 +495,7 @@ impl Manifest {
             topics,
             signer: edn::get_str(v, "aiueos", "signer"),
             signature: edn::get_str(v, "aiueos", "signature"),
+            quota,
         })
     }
 

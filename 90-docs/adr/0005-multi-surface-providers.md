@@ -1,7 +1,38 @@
 # ADR-0005 — Multi-surface capability providers
 
-- Status: proposed (Phase 3, not yet implemented)
+- Status: partially implemented (Phase 3)
 - Date: 2026-06-27
+
+> **Implementation status.** The verify-level contract is in code: `surface::offered`
+> defines each surface's backed caps, `Policy::granted_to` intersects `kernel_caps`
+> with the active surface's offered set, and a `surface-mismatch` violation guards
+> `:aiueos/surface`. The **`Surface`/`Provider` registry value** is in
+> `src/surface.rs`: `Surface::{robot,browser,cloud}()` list their providers
+> (capability + host import name), `offered()`/`is_known()` delegate to it as the
+> single source of truth, and `Surface::union` composes them (e.g. an edge gateway
+> = `robot ∪ cloud`). **Tooling:** `aiueos surface inspect <id>` prints the offered
+> set (text or `--edn`). **Runtime providers** for both non-robot surfaces have
+> landed, bound in `src/host.rs` as gated `aiueos:host` host functions over
+> in-process, deterministic state (the Phase-0 stance: no real DOM, socket, or
+> ambient credentials inside a host import):
+>
+> - **browser** — `dom/render` + `dom/event` + `input/event` +
+>   `framebuffer/present` over a `DomSurface` (a render log + semantic event FIFO
+>   fixture-loadable from `:aiueos/dom-events` + low-level input FIFO from
+>   `:aiueos/input-events` + an in-memory framebuffer frame log);
+>   `tests/browser.rs`.
+> - **cloud** — `storage/kv` (`kv-set` / `kv-get`, an in-memory map threaded out
+>   through `HostOutcome::cloud`) + `net/fetch` (`fetch`, a URL→response fixture map
+>   from `:aiueos/fetch`) over a `CloudSurface`; `tests/cloud.rs`. This is the
+>   "second real surface end to end" of Increment 4: a manifest moves between
+>   surfaces unchanged, gated identically, backed by different providers.
+>
+> **CLI:** `aiueos run|up --surface <id>` selects the active surface;
+> `--dom-events`, `--input-events`, `--cloud-fixture`, and `--browser-out`
+> provide deterministic surface fixtures/bridges. `Provider::bind` and `Surface::install` are now the
+> runtime installation path in `src/host.rs`: the registry allows multiple host
+> imports for one capability (`poll`/`take`/`count` all gate on
+> `topic/subscribe`; `kv-set`/`kv-get` both gate on `storage/kv`).
 
 ## Context
 
@@ -53,32 +84,35 @@ is the set a deployment offers. Sketch:
 pub struct Provider {
     pub name: &'static str,       // e.g. "fetch"
     pub cap: &'static str,        // e.g. "net/fetch"
-    pub bind: ProviderBind,       // installs into the wasmtime Linker<HostCtx>
 }
 
 /// A deployment target: the capabilities it *offers* and their impls.
 pub struct Surface {
     pub id: String,               // "robot" | "browser" | "cloud" | ...
-    providers: BTreeMap<String, Provider>,   // cap -> provider
+    providers: BTreeMap<String, Provider>,   // host import name -> provider
 }
 
 impl Surface {
     /// The capabilities this surface can back — generalizes `kernel_caps`.
     pub fn offered(&self) -> BTreeSet<String> {
-        self.providers.keys().cloned().collect()
+        self.providers.values().map(|p| p.cap).collect()
     }
     /// Bind every provider into the Linker. Each closure still calls
     /// `gate(c.data(), provider.cap, provider.name)?` first, exactly as the
     /// seven built-ins do today — the gate is never bypassed.
     pub fn install(&self, linker: &mut Linker<HostCtx>) -> Result<()> { /* ... */ }
 }
+
+impl Provider {
+    fn bind(&self, linker: &mut Linker<HostCtx>) -> Result<bool> { /* ... */ }
+}
 ```
 
-The seven functions in `src/host.rs` become the **robot surface's** providers
+The base `aiueos:host` functions in `src/host.rs` install from the provider
+registry. The robot surface's implemented providers are
 (`log`→`log/write`, `clock`→`clock/monotonic`, `random`→`random/bytes`,
 `publish`→`topic/publish`, `poll`/`count`/`take`→`topic/subscribe`).
-`run_with_host` keeps its signature but takes `&Surface` instead of hard-coding
-the bindings; the existing call sites construct `Surface::robot()`.
+Browser and cloud providers install from the same path.
 
 ### How `kernel_caps` generalizes to the offered set
 
@@ -171,9 +205,9 @@ add zero coupling to the core graph/policy engine, which keeps building under
 
 ## Increments
 
-1. **Data model + this ADR** — `Surface` / `Provider` types; refactor the seven
-   `src/host.rs` bindings into `Surface::robot()`; `run_with_host` takes
-   `&Surface`. Behavior identical to today (one surface). *(no new capability yet)*
+1. **Data model + this ADR** — `Surface` / `Provider` types; refactor the
+   implemented `src/host.rs` `aiueos:host` bindings into `Provider::bind` /
+   `Surface::install`. Behavior identical to today for existing providers.
 2. **Offered-set gating** — `granted_to` intersects `kernel_caps` with
    `surface.offered()`; an import resolving to a cap the surface doesn't offer is
    `unresolved-capability`. Audited with the active surface id.
@@ -183,8 +217,8 @@ add zero coupling to the core graph/policy engine, which keeps building under
 4. **A second real surface** — `Surface::cloud()` with `storage/kv` + `net/fetch`
    brokers (host-side, capability-gated), proving a non-robot surface end to end
    and that a manifest moves between surfaces unchanged.
-5. **Tooling** — `aiueos surface inspect <id>` (offered set), `aiueos up
-   --surface <id>`, and audit lines carrying `:aiueos/surface`.
+5. **Tooling** — `aiueos surface inspect <id>` (offered set/providers),
+   `aiueos up --surface <id>`, and audit lines carrying `:aiueos/surface`.
 
 ## Consequences
 

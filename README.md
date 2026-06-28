@@ -151,6 +151,20 @@ $BIN verify examples/system.aiueos.edn
 $BIN run examples/robot/sensor.edn --system examples/robot/robot.aiueos.edn
 #  ✓ driver/sensor :: tick([21]) = 21
 
+# run the deterministic browser GUI surface and write a static HTML bridge
+$BIN run examples/browser/app.edn --policy examples/browser/policy.edn \
+  --surface browser --dom-events examples/browser/dom-events.edn \
+  --browser-out /tmp/aiueos-browser.html
+#  ✓ app/browser-demo :: run([]) = 83
+#    dom-rendered: 1 fragment(s)
+#    browser-out: /tmp/aiueos-browser.html
+
+# present one deterministic framebuffer frame through the same browser GUI surface
+$BIN run examples/browser/framebuffer.edn --policy examples/browser/policy.edn \
+  --surface browser
+#  ✓ app/framebuffer-demo :: run([]) = 8
+#    framebuffer: 1 frame(s)
+
 # gate a source against the safe-kotoba subset
 $BIN check examples/apps/notes.clj
 
@@ -173,8 +187,12 @@ $BIN inspect examples/system.aiueos.edn --edn
 ```text
 aiueos verify  <manifest|system>.edn [--policy p.edn] [--edn]        capability + policy check
 aiueos inspect <system>.edn          [--policy p.edn] [--edn|--dot]  capability graph (text / EDN / Graphviz)
-aiueos up      <system>.edn          [--policy p.edn] [--edn] [--rounds N] [--dry-run]   boot the system
-aiueos run     <manifest>.edn        [--policy p.edn] [--system s.edn] [--edn]
+aiueos up      <system>.edn          [--policy p.edn] [--surface id] [--edn] [--rounds N] [--dry-run] [--kqe-store s.edn] [--llm-fixture f.edn] [--dom-events f.edn] [--input-events f.edn] [--cloud-fixture f.edn] [--browser-out out.html]   boot the system
+aiueos run     <manifest>.edn        [--policy p.edn] [--system s.edn] [--surface id] [--edn] [--llm-fixture f.edn] [--dom-events f.edn] [--input-events f.edn] [--cloud-fixture f.edn] [--browser-out out.html]
+aiueos image build <system>.edn      --aiueos-bin <linux-bin> [--policy p.edn] [--out initramfs.cpio.gz] [--dry-run] [--edn]
+aiueos vm up   <system>.edn          [--policy p.edn] [--name N] [--provider auto|lima] [--dry-run] [--edn]   run through a Mac microVM provider
+aiueos vm boot <system>.edn          --kernel Image --aiueos-bin <linux-bin> [--policy p.edn] [--block raw.img] [--console pl011|virtio-console] [--console-socket path] [--graphics none|virtio-gpu] [--display cocoa|gtk|sdl] [--dry-run] [--edn]   boot kernel+initramfs
+aiueos surface inspect <id>          [--edn]                         inspect robot|browser|cloud providers
 aiueos compile <source.clj|manifest> [-o out.wasm]                   CLJ/Kotoba → wasm (kototama feature)
 aiueos check   <source.clj>                                          safe-kotoba subset gate
 aiueos hash    <file> [--edn]                                        sha256 for :aiueos/wasm-sha256
@@ -190,11 +208,103 @@ rejects any unsigned component. (Built with the default `signing` feature.)
 
 `--edn` (machine-readable) is accepted by `verify`/`inspect`/`up`/`run`/`audit`;
 `up --rounds N` runs a periodic control loop; `up --dry-run` validates without
-launching; `inspect --dot` emits Graphviz.
+launching; `up --kqe-store s.edn` persists the in-process KQE graph across boot
+invocations; `run`/`up --llm-fixture f.edn` injects deterministic LLM responses
+for `kotoba:kais/llm.infer`; `--surface browser` enables the browser DOM/input
+provider set, `--dom-events` injects deterministic semantic browser events,
+`--input-events` injects low-level input events, and
+`--browser-out` writes the rendered fragments to a static HTML bridge;
+`inspect --dot` emits Graphviz.
 
 All four inspection/execution commands (`verify`/`inspect`/`up`/`run`) accept
 `--edn` for machine-readable output — success verdicts, denials, *and* structural
 errors are emitted as EDN, so an AI agent can drive the whole lifecycle as data.
+
+### Bootable image path
+
+aiueos can now build a minimal initramfs where `/init` is the aiueos binary
+itself. This removes the Ubuntu userspace dependency from the boot path:
+
+```bash
+# macOS/aarch64 convenience path: build Linux /init, fetch a virt kernel,
+# build the robot initramfs, then boot QEMU/HVF.
+bb robot:boot
+
+# CI/smoke path: boot, wait for PID 1 idle, stop QEMU, exit 0.
+bb robot:smoke
+
+# CI/smoke path with a raw virtio-blk backing file exposed to the guest.
+bb robot:block-smoke
+
+# CI/smoke path with an additional virtio-console device exposed to the guest.
+bb robot:console-smoke
+```
+
+```bash
+$BIN image build examples/robot/robot.aiueos.edn \
+  --aiueos-bin target/aarch64-unknown-linux-musl/release/aiueos \
+  --dry-run
+
+$BIN vm boot examples/robot/robot.aiueos.edn \
+  --kernel /path/to/linux/arch/arm64/boot/Image \
+  --aiueos-bin target/aarch64-unknown-linux-musl/release/aiueos \
+  --dry-run
+
+$BIN vm boot examples/robot/robot.aiueos.edn \
+  --kernel /path/to/linux/arch/arm64/boot/Image \
+  --aiueos-bin target/aarch64-unknown-linux-musl/release/aiueos \
+  --block /path/to/block.raw \
+  --dry-run
+
+$BIN vm boot examples/robot/robot.aiueos.edn \
+  --kernel /path/to/linux/arch/arm64/boot/Image \
+  --aiueos-bin target/aarch64-unknown-linux-musl/release/aiueos \
+  --console virtio-console \
+  --console-socket /tmp/aiueos-console.sock \
+  --dry-run
+
+$BIN vm boot examples/robot/robot.aiueos.edn \
+  --kernel /path/to/linux/arch/arm64/boot/Image \
+  --aiueos-bin target/aarch64-unknown-linux-musl/release/aiueos \
+  --graphics virtio-gpu --display cocoa \
+  --dry-run
+```
+
+The resulting initramfs contains:
+
+- `/init` — the Linux-target aiueos binary
+- `/etc/aiueos/boot.edn` — points `/init` at the system graph and optional policy
+- `/etc/aiueos/system/...` — the system graph directory
+
+`vm boot` launches QEMU with `-kernel Image -initrd <initramfs> -append
+"console=ttyAMA0 panic=0 rdinit=/init"`. This is not yet the final aiueos
+microkernel image, but it is a distro-free boot path where aiueos is PID 1.
+The convenience script downloads Alpine's aarch64 `vmlinuz-virt` as a kernel
+only; no Alpine or Ubuntu rootfs is used.
+
+`vm boot --graphics virtio-gpu` removes `-nographic` and exposes
+`-device virtio-gpu-pci` to the guest. Linux still owns the early scanout in this
+path; the aiueos-native virtio-gpu driver is a later increment.
+
+`vm boot --block block.raw` exposes a raw backing file with
+`-device virtio-blk-pci`. This is now reflected in dry-run and `--edn` boot
+plans, matching the safe/file-backed virtio-blk provider core. The
+`robot:block-smoke` bb task creates `examples/robot/.aiueos/image/aiueos-robot.raw`
+by default; override it with `AIUEOS_BLOCK=/path/to/block.raw`.
+
+`vm boot --console virtio-console` keeps the PL011 kernel console as the boot
+console and additionally exposes `virtio-serial-pci` plus a named `virtconsole`
+backed by a host socket. This gives the native guest driver path a stable QEMU
+device to bind while keeping the current PID-1 smoke path deterministic.
+
+For development on macOS, the older wrapper path remains available:
+
+```bash
+$BIN vm up examples/robot/robot.aiueos.edn --provider lima --dry-run
+```
+
+That path runs aiueos inside a Linux microVM provider. Use `vm boot` when you
+want the kernel+initramfs path without a distro rootfs.
 
 ### Supply-chain integrity
 
@@ -237,6 +347,46 @@ safe-kotoba; the lowest layer (real MMIO/DMA/IRQ) is a kernel-provided unsafe
 adapter and is later-phase work — but the `:effects`/`:requires` seams are
 already declared so policy can gate DMA today.
 
+The safe native virtio core is now present in `src/virtio.rs`: transport status
+handshake, feature negotiation, queue-size validation, feature-aware
+descriptor-chain validation, split-queue memory layout calculation, and
+available/used ring accounting. It also defines a virtio-mmio register I/O
+boundary, a bounded volatile MMIO accessor for already-mapped device windows,
+and safe MMIO transport adapter for header validation, feature selection, queue
+address programming, queue notification, and interrupt status decode/ack.
+Descriptor buffers and queue memory are checked against a directional DMA map
+before programming the device, and allocator-provided DMA allocations can be
+validated and installed through an explicit IOMMU programming boundary with
+rollback on map failure. A checked IOMMU backend enforces aperture bounds,
+overlap rejection, active mapping introspection, and exact unmap matching. A
+deterministic DMA aperture allocator can allocate and program split-queue
+backing memory through that boundary. IRQ lines can be subscribed through an
+explicit interrupt-controller boundary; a checked IRQ backend rejects duplicate
+lines and delivers only subscribed interrupt sources into provider event sinks.
+Pending virtio interrupt status can be taken and acknowledged before delivery.
+The core also includes a
+virtio-blk service core: read/write requests are encoded as three-descriptor
+chains with directional DMA validation, submitted through an available ring,
+tracked as pending descriptor heads, and completed from used-ring entries with
+status decoding. A component-facing provider adapter now materializes requests
+through a backend boundary, submits only after backend success, notifies the
+queue, and polls decoded completions. A synchronous emulated block backend
+exercises the same provider/backend contract against real guest-memory bytes and
+sector storage for read/write E2E coverage; a file-backed backend presents a
+regular host file as a sector-addressed block device for host/VM smoke paths.
+The virtio-console core now mirrors that shape for one-descriptor receive and
+transmit buffers: RX buffers are device-writable, TX buffers are
+device-readable, descriptor heads are tracked through available/used rings, and
+an emulated console backend moves bytes between guest memory and deterministic
+input/output queues.
+Virtio PCI vendor capabilities
+are modeled and resolved into common/notify/ISR/device regions with notify
+offset validation; PCI config-space capability lists are walked and parsed into
+that model. Kernel-provided BAR mappings are checked against those regions
+before volatile MMIO slices are produced. Host-specific hardware IOMMU/IRQ
+adapters and VM MMIO-backed block/console-device backends are still later-phase
+work.
+
 ```edn
 {:aiueos/component :driver/virtio-blk
  :aiueos/kind :driver
@@ -275,6 +425,80 @@ Every recognized key — anything else in the `:aiueos/` namespace is rejected.
 | `:aiueos/topics` | named-topic → id map; `publishes`/`subscribes` are *derived* from the exported/imported `:topic/<name>` capabilities via this map |
 | `:aiueos/publishes` | topic ids this component may publish to (per-topic isolation; overrides derivation) |
 | `:aiueos/subscribes` | topic ids this component may read (overrides derivation) |
+
+### Safe Kotoba host capabilities
+
+With the `kototama` feature, `:aiueos/source` may point at `.kotoba`, `.clj`, or
+`.cljc` source. `.kotoba` is treated as the Kotoba reader target; `.cljc` reader
+conditionals select the `:kotoba` branch. The broker converts verified aiueos
+capabilities into a deny-by-default `kotoba_clj::Policy`, compiles the safe
+subset with the policy-aware prelude, then re-checks the concrete target at
+runtime.
+
+| source call | aiueos capability | runtime behavior |
+|---|---|---|
+| `(has-capability? r a)` | `:kotoba.auth/self` | self-introspection only |
+| `(kqe-assert! g s p obj)` / `(kqe-retract! ...)` | `:kotoba.graph-write/<graph>` | mutates the in-process KQE store |
+| `(kqe-get-objects g s p)` | `:kotoba.graph-read/<graph>` | SPO lookup scoped to the granted graph |
+| `(kqe-query filter)` | `:kotoba.graph-read/<graph>` or `:kotoba.graph-read/*` | snapshot query filtered by readable graph |
+| `(llm-infer model prompt)` | `:kotoba.infer/<model>` | fixture-backed deterministic inference |
+
+`kqe-query` accepts `""` (all readable quads), a plain predicate string such as
+`"kg/role"`, or an EDN map string such as
+`"{:graph \"kg\" :subject \"alice\" :predicate \"kg/role\"}"`. With the
+`kototama` feature, the map may also contain `:datomic` with a kotoba-datomic
+query:
+
+```clojure
+(kqe-query "{:graph \"kg\"
+             :datomic {:find [?name]
+                       :where [[?e :kg/role \"admin\"]
+                               [?e :kg/name ?name]]}}")
+```
+
+If `:graph` is present, the host re-checks `kotoba.graph-read/<graph>` before
+scanning or materializing the Datomic snapshot.
+
+KQE persistence uses:
+
+```bash
+$BIN up system.aiueos.edn --policy policy.edn --kqe-store kqe-store.edn
+```
+
+LLM fixtures use:
+
+```edn
+{:aiueos/llm {"modelA" "fixture-answer"}}
+```
+
+and are wired with either:
+
+```bash
+$BIN run agent.edn --policy policy.edn --llm-fixture llm.edn
+$BIN up system.aiueos.edn --policy policy.edn --llm-fixture llm.edn
+```
+
+This surface is specified in
+[ADR-0007](90-docs/adr/0007-kotoba-kais-host-surface.md).
+
+## GUI surface
+
+The GUI path implemented today is the deterministic **browser surface**:
+`dom/render` appends rendered markup, `dom/event` consumes injected input events,
+`input/event` consumes lower-level input events, `framebuffer/present` records
+linear framebuffer frames, and `--browser-out` writes the DOM render log as a
+static HTML bridge. A whole system can be booted the same way:
+
+```bash
+$BIN up examples/browser/browser.aiueos.edn --policy examples/browser/policy.edn \
+  --surface browser --dom-events examples/browser/dom-events.edn \
+  --browser-out /tmp/aiueos-browser.html
+```
+
+This is not yet a native VM compositor. The in-memory framebuffer ABI is present,
+and `vm boot --graphics virtio-gpu` can expose a QEMU display device; the native
+aiueos virtio-gpu scanout driver is specified, but not implemented, in
+[ADR-0009](90-docs/adr/0009-gui-surface-and-framebuffer.md).
 
 ## Robotics: capabilities you actually *call* at run time
 
@@ -392,11 +616,12 @@ defaults the build target to wasm32.)
 | 0 | manifests (fail-loud), capability graph, policy reasoner, broker, safe-check, queryable audit, staged boot; **runtime-enforced** `aiueos:host` ABI (log/clock/random/publish/poll/take/count) + FIFO topic bus, per-topic isolation, `--rounds` control loop, artifact integrity, `--edn` agent surface | ✅ |
 | 1 | **authenticity** — ed25519 signed manifests, signer registry, trust elevation, provenance, `require-signed`, `aiueos sign` ([ADR-0003](90-docs/adr/0003-signed-manifests.md)) | ✅ |
 | 2 | **code as data** — `aiueos admit`: trust floored to `:ai-generated`, structured verdict + reason-codes for an agent loop ([ADR-0004](90-docs/adr/0004-code-as-data-admit.md)) | ✅ |
-| 3 | **multi-surface providers** — one model on edge/robotics/cloud/browser/client ([ADR-0005](90-docs/adr/0005-multi-surface-providers.md)) | 📋 designed |
+| 3 | **multi-surface providers** — robot/cloud/browser providers, `--surface`, fixtures, browser bridge ([ADR-0005](90-docs/adr/0005-multi-surface-providers.md), [ADR-0009](90-docs/adr/0009-gui-surface-and-framebuffer.md)) | ✅ runtime path |
 | 4 | **scheduler + IO quota** — per-cycle host-call caps, cooperative period/priority scheduling ([ADR-0006](90-docs/adr/0006-scheduler-and-io-quota.md)) | ✅ |
-| 5 | cross-machine messaging + publisher authentication | 🔜 |
-| 6 | aiueos microkernel (boot/mem/IPC/cap table/preemptive sched/IRQ) | 🔜 |
-| 7 | real drivers: serial → fb → virtio-blk/net → NVMe → USB → GPU → Wi-Fi (MMIO/DMA/IRQ) | 🔜 |
+| 5 | **safe Kotoba runtime surface** — `.kotoba`/`.cljc` source, policy-aware compile, KQE graph host calls, deterministic LLM fixtures ([ADR-0007](90-docs/adr/0007-kotoba-kais-host-surface.md)) | ✅ |
+| 6 | cross-machine messaging + publisher authentication | 🔜 |
+| 7 | aiueos microkernel (boot/mem/IPC/cap table/preemptive sched/IRQ) | 🔜 |
+| 8 | real drivers: serial → fb → virtio-blk/net → NVMe → USB → GPU → Wi-Fi (safe virtio queue/volatile-MMIO/PCI traversal/BAR mapping IRQ/DMA validation + checked IOMMU/IRQ backends + queue allocator + virtio-blk provider/emulated/file backend exists; hardware adapters/VM MMIO backend next) | 🧱 core |
 
 The design keeps the **TCB small**: microkernel + Wasm runtime + kototama +
 broker + manifest/proof verifier + tiny unsafe hardware adapters. Apps, services,

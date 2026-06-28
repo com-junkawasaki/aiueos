@@ -1,0 +1,3 @@
+{:aiueos/surface :browser
+ :aiueos/kernel-caps #{:dom/render :dom/event :input/event :framebuffer/present
+                        :net/fetch :log/write :clock/monotonic}}

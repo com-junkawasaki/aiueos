@@ -18,9 +18,21 @@ fn aiueos(args: &[&str]) -> (i32, String, String) {
     )
 }
 
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("aiueos-cli-test");
+fn scratch_dir(name: &str) -> PathBuf {
+    let tid = format!("{:?}", std::thread::current().id())
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>();
+    let dir = std::env::temp_dir()
+        .join("aiueos-cli-test")
+        .join(format!("{}-{tid}", std::process::id()))
+        .join(name);
     std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let dir = scratch_dir("default");
     dir.join(name)
 }
 
@@ -44,8 +56,15 @@ fn no_args_prints_usage_and_exits_zero() {
 #[test]
 fn help_exits_zero() {
     for flag in ["help", "-h", "--help"] {
-        let (code, _o, _e) = aiueos(&[flag]);
+        let (code, _out, err) = aiueos(&[flag]);
         assert_eq!(code, 0, "`aiueos {flag}` exits 0");
+        assert!(
+            err.contains("--kqe-store")
+                && err.contains("--llm-fixture")
+                && err.contains("aiueos image build")
+                && err.contains("aiueos vm up"),
+            "`aiueos {flag}` documents KQE/LLM fixture and VM flags: {err}"
+        );
     }
 }
 
@@ -54,6 +73,484 @@ fn unknown_command_exits_two() {
     let (code, _out, err) = aiueos(&["wibble"]);
     assert_eq!(code, 2, "unknown command → exit 2");
     assert!(err.contains("unknown command"));
+}
+
+#[test]
+fn surface_inspect_reports_every_provider_import() {
+    let (code, out, err) = aiueos(&["surface", "inspect", "robot"]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(out.contains("topic/subscribe  ⇐  aiueos:host/poll"));
+    assert!(out.contains("topic/subscribe  ⇐  aiueos:host/take"));
+    assert!(out.contains("topic/subscribe  ⇐  aiueos:host/count"));
+    let (code, out, err) = aiueos(&["surface", "inspect", "browser"]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(out.contains("input/event  ⇐  aiueos:host/input-event"));
+
+    let (code, out, err) = aiueos(&["surface", "inspect", "cloud", "--edn"]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid surface EDN");
+    let offered = aiueos::edn::get(&v, "aiueos", "offered").expect("offered vector");
+    let rendered = kotoba_edn::to_string(offered);
+    assert!(
+        rendered.contains("\"kv-set\""),
+        "kv-set provider present: {rendered}"
+    );
+    assert!(
+        rendered.contains("\"kv-get\""),
+        "kv-get provider present: {rendered}"
+    );
+}
+
+#[test]
+fn vm_up_dry_run_generates_a_lima_plan_after_verification() {
+    let dir = scratch_dir("vmplan");
+    let system = dir.join("system.aiueos.edn");
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :vm-demo
+            :aiueos/components ["app.edn"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.edn"),
+        r#"{:aiueos/component :app/vm-demo
+            :aiueos/kind :app
+            :aiueos/wasm "app.wat"
+            :aiueos/exports #{:log/write}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "vm",
+        "up",
+        system.to_str().unwrap(),
+        "--provider",
+        "lima",
+        "--dry-run",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(out.contains("provider: lima"), "prints provider: {out}");
+    assert!(out.contains("limactl start"), "prints start command: {out}");
+    assert!(out.contains("limactl shell"), "prints run command: {out}");
+    let config = dir.join(".aiueos/vm/aiueos-vm-demo.lima.yaml");
+    let yaml = std::fs::read_to_string(config).expect("vm config generated");
+    assert!(
+        yaml.contains("mountPoint: /workspace")
+            && yaml.contains("mountPoint: /aiueos-input")
+            && yaml.contains("cargo run --quiet -- up '/aiueos-input/system.aiueos.edn'"),
+        "lima yaml mounts repo and runs aiueos: {yaml}"
+    );
+}
+
+#[test]
+fn vm_up_edn_reports_machine_readable_plan() {
+    let dir = scratch_dir("vmedn");
+    let system = dir.join("system.aiueos.edn");
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :vm-edn
+            :aiueos/components ["app.edn"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.edn"),
+        r#"{:aiueos/component :app/vm-edn
+            :aiueos/kind :app
+            :aiueos/wasm "app.wat"
+            :aiueos/exports #{:log/write}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "vm",
+        "up",
+        system.to_str().unwrap(),
+        "--provider",
+        "lima",
+        "--edn",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid vm plan EDN");
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "vm-provider").and_then(|x| x.as_string()),
+        Some("lima")
+    );
+    assert!(aiueos::edn::get(&v, "aiueos", "start")
+        .and_then(|x| x.as_string())
+        .is_some_and(|s| s.contains("limactl start")));
+}
+
+#[test]
+fn image_build_dry_run_plans_minimal_initramfs() {
+    let dir = scratch_dir("imageplan");
+    let system = dir.join("system.aiueos.edn");
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :image-demo
+            :aiueos/components ["app.edn"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.edn"),
+        r#"{:aiueos/component :app/image-demo
+            :aiueos/kind :app
+            :aiueos/wasm "app.wat"
+            :aiueos/exports #{:log/write}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&["image", "build", system.to_str().unwrap(), "--dry-run"]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(out.contains("initramfs"), "prints initramfs path: {out}");
+    assert!(
+        out.contains("guest system: /etc/aiueos/system/system.aiueos.edn"),
+        "prints guest system path: {out}"
+    );
+}
+
+#[test]
+fn image_build_edn_reports_machine_readable_plan() {
+    let dir = scratch_dir("imageedn");
+    let system = dir.join("system.aiueos.edn");
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :image-edn
+            :aiueos/components ["app.edn"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.edn"),
+        r#"{:aiueos/component :app/image-edn
+            :aiueos/kind :app
+            :aiueos/wasm "app.wat"
+            :aiueos/exports #{:log/write}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&["image", "build", system.to_str().unwrap(), "--edn"]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid image plan EDN");
+    assert!(aiueos::edn::get(&v, "aiueos", "image")
+        .and_then(|x| x.as_string())
+        .is_some_and(|s| s.ends_with(".initramfs.cpio.gz")));
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "guest-system").and_then(|x| x.as_string()),
+        Some("/etc/aiueos/system/system.aiueos.edn")
+    );
+}
+
+#[test]
+fn vm_boot_dry_run_uses_kernel_and_initramfs_without_distro_rootfs() {
+    let dir = scratch_dir("vmboot");
+    let system = dir.join("system.aiueos.edn");
+    let kernel = dir.join("Image");
+    std::fs::write(&kernel, "not-a-real-kernel").unwrap();
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :boot-demo
+            :aiueos/components ["app.edn"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.edn"),
+        r#"{:aiueos/component :app/boot-demo
+            :aiueos/kind :app
+            :aiueos/wasm "app.wat"
+            :aiueos/exports #{:log/write}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "vm",
+        "boot",
+        system.to_str().unwrap(),
+        "--kernel",
+        kernel.to_str().unwrap(),
+        "--dry-run",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(
+        out.contains("qemu-system-aarch64"),
+        "prints qemu command: {out}"
+    );
+    assert!(out.contains("-initrd"), "uses initramfs: {out}");
+    assert!(out.contains("rdinit=/init"), "boots /init directly: {out}");
+}
+
+#[test]
+fn vm_boot_dry_run_can_request_virtio_gpu_graphics() {
+    let dir = scratch_dir("vmbootgui");
+    let system = dir.join("system.aiueos.edn");
+    let kernel = dir.join("Image");
+    std::fs::write(&kernel, "not-a-real-kernel").unwrap();
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :boot-gui-demo
+            :aiueos/components ["app.edn"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.edn"),
+        r#"{:aiueos/component :app/boot-gui-demo
+            :aiueos/kind :app
+            :aiueos/wasm "app.wat"
+            :aiueos/exports #{:log/write}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "vm",
+        "boot",
+        system.to_str().unwrap(),
+        "--kernel",
+        kernel.to_str().unwrap(),
+        "--graphics",
+        "virtio-gpu",
+        "--display",
+        "cocoa",
+        "--dry-run",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(
+        out.contains("graphics: virtio-gpu"),
+        "prints graphics: {out}"
+    );
+    assert!(out.contains("display: cocoa"), "prints display: {out}");
+    assert!(
+        out.contains("-device virtio-gpu-pci") && out.contains("-display 'cocoa'"),
+        "qemu command exposes virtio-gpu: {out}"
+    );
+    assert!(
+        !out.contains("-nographic"),
+        "graphics mode must not keep -nographic: {out}"
+    );
+}
+
+#[test]
+fn vm_boot_dry_run_can_attach_virtio_blk_backing_file() {
+    let dir = scratch_dir("vmbootblk");
+    let system = dir.join("system.aiueos.edn");
+    let kernel = dir.join("Image");
+    let block = dir.join("block.raw");
+    std::fs::write(&kernel, "not-a-real-kernel").unwrap();
+    std::fs::write(&block, vec![0u8; 1024]).unwrap();
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :boot-blk-demo
+            :aiueos/components ["app.edn"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.edn"),
+        r#"{:aiueos/component :app/boot-blk-demo
+            :aiueos/kind :app
+            :aiueos/wasm "app.wat"
+            :aiueos/exports #{:log/write}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "vm",
+        "boot",
+        system.to_str().unwrap(),
+        "--kernel",
+        kernel.to_str().unwrap(),
+        "--block",
+        block.to_str().unwrap(),
+        "--dry-run",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(out.contains("block:"), "prints block path: {out}");
+    assert!(out.contains("-drive"), "qemu command has drive: {out}");
+    assert!(
+        out.contains("virtio-blk-pci,drive=aiueosblk"),
+        "qemu command exposes virtio-blk: {out}"
+    );
+}
+
+#[test]
+fn vm_boot_dry_run_can_expose_virtio_console() {
+    let dir = scratch_dir("vmbootconsole");
+    let system = dir.join("system.aiueos.edn");
+    let kernel = dir.join("Image");
+    let socket = dir.join("aiueos-console.sock");
+    std::fs::write(&kernel, "not-a-real-kernel").unwrap();
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :boot-console-demo
+            :aiueos/components ["app.edn"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.edn"),
+        r#"{:aiueos/component :app/boot-console-demo
+            :aiueos/kind :app
+            :aiueos/wasm "app.wat"
+            :aiueos/exports #{:log/write}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "vm",
+        "boot",
+        system.to_str().unwrap(),
+        "--kernel",
+        kernel.to_str().unwrap(),
+        "--console",
+        "virtio-console",
+        "--console-socket",
+        socket.to_str().unwrap(),
+        "--dry-run",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(
+        out.contains("console: virtio-console"),
+        "prints console mode: {out}"
+    );
+    assert!(
+        out.contains("console-socket:"),
+        "prints console socket path: {out}"
+    );
+    assert!(
+        out.contains("-device virtio-serial-pci")
+            && out.contains("virtconsole,chardev=aiueoscon,name=aiueos.console.0"),
+        "qemu command exposes virtio-console: {out}"
+    );
+}
+
+#[test]
+fn vm_boot_edn_reports_virtio_gpu_graphics() {
+    let dir = scratch_dir("vmbootguiedn");
+    let system = dir.join("system.aiueos.edn");
+    let kernel = dir.join("Image");
+    std::fs::write(&kernel, "not-a-real-kernel").unwrap();
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :boot-gui-edn
+            :aiueos/components ["app.edn"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.edn"),
+        r#"{:aiueos/component :app/boot-gui-edn
+            :aiueos/kind :app
+            :aiueos/wasm "app.wat"
+            :aiueos/exports #{:log/write}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "vm",
+        "boot",
+        system.to_str().unwrap(),
+        "--kernel",
+        kernel.to_str().unwrap(),
+        "--graphics",
+        "virtio-gpu",
+        "--edn",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid vm boot EDN");
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "graphics").and_then(|x| x.as_string()),
+        Some("virtio-gpu")
+    );
+    assert!(aiueos::edn::get(&v, "aiueos", "qemu")
+        .and_then(|x| x.as_string())
+        .is_some_and(|s| s.contains("-device virtio-gpu-pci")));
+}
+
+#[test]
+fn vm_boot_edn_reports_virtio_console() {
+    let dir = scratch_dir("vmbootconsoleedn");
+    let system = dir.join("system.aiueos.edn");
+    let kernel = dir.join("Image");
+    let socket = dir.join("aiueos-console.sock");
+    std::fs::write(&kernel, "not-a-real-kernel").unwrap();
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :boot-console-edn
+            :aiueos/components ["app.edn"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.edn"),
+        r#"{:aiueos/component :app/boot-console-edn
+            :aiueos/kind :app
+            :aiueos/wasm "app.wat"
+            :aiueos/exports #{:log/write}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "vm",
+        "boot",
+        system.to_str().unwrap(),
+        "--kernel",
+        kernel.to_str().unwrap(),
+        "--console",
+        "virtio-console",
+        "--console-socket",
+        socket.to_str().unwrap(),
+        "--edn",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid vm boot EDN");
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "console").and_then(|x| x.as_string()),
+        Some("virtio-console")
+    );
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "console-socket").and_then(|x| x.as_string()),
+        Some(socket.to_str().unwrap())
+    );
+    assert!(aiueos::edn::get(&v, "aiueos", "qemu")
+        .and_then(|x| x.as_string())
+        .is_some_and(|s| s.contains("virtconsole,chardev=aiueoscon")));
+}
+
+#[test]
+fn vm_boot_edn_reports_virtio_blk_backing_file() {
+    let dir = scratch_dir("vmbootbl kedn");
+    let system = dir.join("system.aiueos.edn");
+    let kernel = dir.join("Image");
+    let block = dir.join("block.raw");
+    std::fs::write(&kernel, "not-a-real-kernel").unwrap();
+    std::fs::write(&block, vec![0u8; 1024]).unwrap();
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :boot-blk-edn
+            :aiueos/components ["app.edn"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.edn"),
+        r#"{:aiueos/component :app/boot-blk-edn
+            :aiueos/kind :app
+            :aiueos/wasm "app.wat"
+            :aiueos/exports #{:log/write}}"#,
+    )
+    .unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "vm",
+        "boot",
+        system.to_str().unwrap(),
+        "--kernel",
+        kernel.to_str().unwrap(),
+        "--block",
+        block.to_str().unwrap(),
+        "--edn",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid vm boot EDN");
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "block").and_then(|x| x.as_string()),
+        Some(block.to_str().unwrap())
+    );
+    assert!(aiueos::edn::get(&v, "aiueos", "qemu")
+        .and_then(|x| x.as_string())
+        .is_some_and(|s| s.contains("virtio-blk-pci,drive=aiueosblk")));
 }
 
 // ---------------------------------------------------------------------------
@@ -100,7 +597,7 @@ fn audit_replays_a_populated_log() {
     // `verify` writes a grant entry to <manifest-dir>/.aiueos/audit.edn; replay it
     // and check the populated-log formatting (header + ts/event/component/detail).
     // ISOLATED dir so a parallel test can't truncate the shared audit log mid-test.
-    let dir = std::env::temp_dir().join("aiueos-cli-auditreplay");
+    let dir = scratch_dir("auditreplay");
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = dir.join("auditme.edn");
     std::fs::write(
@@ -137,7 +634,7 @@ fn audit_edn_on_empty_log_is_an_empty_vector() {
 fn audit_filters_by_event_and_emits_edn() {
     // Use an ISOLATED dir so verify's audit log isn't shared with other tests
     // (the negative filters below rely on the log containing only our entries).
-    let dir = std::env::temp_dir().join("aiueos-cli-auditfilter");
+    let dir = scratch_dir("auditfilter");
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = dir.join("filterme.edn");
     std::fs::write(
@@ -510,6 +1007,143 @@ fn run_executes_a_component_and_emits_edn() {
     assert_eq!(
         aiueos::edn::get(&v, "aiueos", "result").and_then(|x| x.as_integer()),
         Some(21)
+    );
+}
+
+#[cfg(feature = "wasm-runtime")]
+#[test]
+fn run_browser_surface_renders_dom_and_writes_browser_out() {
+    let html = scratch_dir("browser-run").join("browser.html");
+    let html_arg = html.to_str().unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "run",
+        "examples/browser/app.edn",
+        "--policy",
+        "examples/browser/policy.edn",
+        "--surface",
+        "browser",
+        "--dom-events",
+        "examples/browser/dom-events.edn",
+        "--browser-out",
+        html_arg,
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(
+        out.contains("dom-rendered: 1 fragment(s)") && out.contains("browser-out:"),
+        "human output reports DOM render and browser bridge: {out}"
+    );
+    let rendered = std::fs::read_to_string(&html).expect("browser-out written");
+    assert!(
+        rendered.contains("<h1>aiueos browser surface</h1>"),
+        "HTML bridge contains rendered DOM fragment: {rendered}"
+    );
+
+    let edn_html = scratch_dir("browser-run-edn").join("browser.html");
+    let (code, out, err) = aiueos(&[
+        "run",
+        "examples/browser/app.edn",
+        "--policy",
+        "examples/browser/policy.edn",
+        "--edn",
+        "--browser-out",
+        edn_html.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid EDN");
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "result").and_then(|x| x.as_integer()),
+        Some(83)
+    );
+    assert!(out.contains(":aiueos/dom-rendered"));
+    assert!(edn_html.exists(), "--edn still writes the browser bridge");
+}
+
+#[cfg(feature = "wasm-runtime")]
+#[test]
+fn run_browser_framebuffer_surface_presents_a_frame() {
+    let (code, out, err) = aiueos(&[
+        "run",
+        "examples/browser/framebuffer.edn",
+        "--policy",
+        "examples/browser/policy.edn",
+        "--surface",
+        "browser",
+        "--edn",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid EDN");
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "result").and_then(|x| x.as_integer()),
+        Some(8)
+    );
+    let outcome = aiueos::edn::get(&v, "aiueos", "outcome").expect("outcome present");
+    assert_eq!(
+        aiueos::edn::get(outcome, "aiueos", "framebuffer-frames").and_then(|x| x.as_integer()),
+        Some(1)
+    );
+}
+
+#[cfg(feature = "wasm-runtime")]
+#[test]
+fn run_browser_input_surface_reads_input_event_fixture() {
+    let (code, out, err) = aiueos(&[
+        "run",
+        "examples/browser/input.edn",
+        "--policy",
+        "examples/browser/policy.edn",
+        "--surface",
+        "browser",
+        "--input-events",
+        "examples/browser/input-events.edn",
+        "--edn",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid EDN");
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "result").and_then(|x| x.as_integer()),
+        Some(9)
+    );
+}
+
+#[cfg(feature = "wasm-runtime")]
+#[test]
+fn up_browser_surface_renders_system_dom() {
+    let html = scratch_dir("browser-up").join("browser.html");
+    let (code, out, err) = aiueos(&[
+        "up",
+        "examples/browser/browser.aiueos.edn",
+        "--policy",
+        "examples/browser/policy.edn",
+        "--dom-events",
+        "examples/browser/dom-events.edn",
+        "--browser-out",
+        html.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(
+        out.contains("dom-rendered: 1 fragment(s)") && out.contains("browser-out:"),
+        "up reports browser surface output: {out}"
+    );
+    let rendered = std::fs::read_to_string(&html).expect("browser-out written");
+    assert!(rendered.contains("rendered by /init-capable aiueos"));
+}
+
+#[cfg(feature = "wasm-runtime")]
+#[test]
+fn browser_manifest_on_robot_surface_is_denied() {
+    let (code, _out, err) = aiueos(&[
+        "run",
+        "examples/browser/app.edn",
+        "--policy",
+        "examples/browser/policy.edn",
+        "--surface",
+        "robot",
+    ]);
+    assert_eq!(code, 1, "browser manifest cannot run on robot surface");
+    assert!(
+        err.contains("surface-mismatch") || err.contains("unresolved-capability"),
+        "denial names the surface/capability reason: {err}"
     );
 }
 
@@ -955,7 +1589,7 @@ fn compile_rejects_safe_clj_type_errors_before_emitting() {
 #[cfg(feature = "kototama")]
 #[test]
 fn run_kotoba_source_manifest_executes_to_42() {
-    let dir = std::env::temp_dir().join("aiueos-cli-test");
+    let dir = scratch_dir("kotoba-source-run");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("source.kotoba"),
@@ -981,7 +1615,7 @@ fn run_kotoba_source_manifest_executes_to_42() {
 #[cfg(feature = "kototama")]
 #[test]
 fn run_kotoba_source_manifest_binds_kqe_host_imports_from_policy() {
-    let dir = std::env::temp_dir().join("aiueos-cli-test");
+    let dir = scratch_dir("kotoba-kqe-run");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("kqe_source.kotoba"),
@@ -1019,8 +1653,61 @@ fn run_kotoba_source_manifest_binds_kqe_host_imports_from_policy() {
 
 #[cfg(feature = "kototama")]
 #[test]
+fn run_kotoba_source_manifest_binds_llm_fixture_from_policy() {
+    let dir = scratch_dir("kotoba-llm-run");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("agent.kotoba"),
+        r#"(defn main []
+             (str-len (llm-infer "modelA" "hello")))"#,
+    )
+    .unwrap();
+    let manifest = dir.join("agent.edn");
+    std::fs::write(
+        &manifest,
+        r#"{:aiueos/component :app/llm-run
+            :aiueos/kind :app
+            :aiueos/imports #{:kotoba.infer/modelA}
+            :aiueos/source "agent.kotoba"
+            :aiueos/entry "main"}"#,
+    )
+    .unwrap();
+    let policy = dir.join("policy.edn");
+    std::fs::write(
+        &policy,
+        r#"{:aiueos/grants {:app/llm-run #{:kotoba.infer/modelA}}}"#,
+    )
+    .unwrap();
+    let fixture = dir.join("llm.edn");
+    std::fs::write(&fixture, r#"{:aiueos/llm {"modelA" "fixture-answer"}}"#).unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "run",
+        manifest.to_str().unwrap(),
+        "--policy",
+        policy.to_str().unwrap(),
+        "--llm-fixture",
+        fixture.to_str().unwrap(),
+        "--edn",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid EDN");
+    assert_eq!(
+        aiueos::edn::get(&v, "aiueos", "result").and_then(|x| x.as_integer()),
+        Some(14),
+        "llm-infer returns the fixture response bytes"
+    );
+    let audit = std::fs::read_to_string(dir.join(".aiueos/audit.edn")).expect("audit log");
+    assert!(
+        audit.contains("kotoba:kais/llm.infer model=modelA prompt-bytes=5"),
+        "audit records LLM host target: {audit}"
+    );
+}
+
+#[cfg(feature = "kototama")]
+#[test]
 fn run_kotoba_kqe_source_without_policy_grant_is_denied() {
-    let dir = std::env::temp_dir().join("aiueos-cli-test");
+    let dir = scratch_dir("kotoba-kqe-denied");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("kqe_denied.kotoba"),
@@ -1049,19 +1736,71 @@ fn run_kotoba_kqe_source_without_policy_grant_is_denied() {
 
 #[cfg(feature = "kototama")]
 #[test]
+fn run_kotoba_kqe_query_rejects_bad_edn_filter() {
+    let dir = scratch_dir("kotoba-kqe-bad-filter");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("bad_filter.kotoba"),
+        r#"(defn main []
+             (kqe-count (kqe-query "{:graph \"kg\" :unknown \"x\"}")))"#,
+    )
+    .unwrap();
+    let manifest = dir.join("bad_filter.edn");
+    std::fs::write(
+        &manifest,
+        r#"{:aiueos/component :app/kqe-bad-filter
+            :aiueos/kind :app
+            :aiueos/imports #{:kotoba.graph-read/kg}
+            :aiueos/source "bad_filter.kotoba"
+            :aiueos/entry "main"}"#,
+    )
+    .unwrap();
+    let policy = dir.join("policy.edn");
+    std::fs::write(
+        &policy,
+        r#"{:aiueos/grants {:app/kqe-bad-filter #{:kotoba.graph-read/kg}}}"#,
+    )
+    .unwrap();
+
+    let (code, _out, err) = aiueos(&[
+        "run",
+        manifest.to_str().unwrap(),
+        "--policy",
+        policy.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert!(err.contains("run error"), "stderr: {err}");
+    let audit = std::fs::read_to_string(dir.join(".aiueos/audit.edn")).expect("audit log");
+    assert!(
+        audit.contains(":reject") && audit.contains("run failed"),
+        "runtime filter denial is audited: {audit}"
+    );
+}
+
+#[cfg(feature = "kototama")]
+#[test]
 fn up_threads_kqe_store_between_kotoba_components() {
-    let dir = std::env::temp_dir().join("aiueos-cli-test-kqe-system");
+    let dir = scratch_dir("kotoba-kqe-system");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("writer.kotoba"),
         r#"(defn main []
-             (if (kqe-assert! "kg" "alice" "kg/name" "v") 1 0))"#,
+             (do
+               (kqe-assert! "kg" "alice" "kg/name" "v")
+               (if (kqe-assert! "kg" "alice" "kg/role" "admin") 1 0)))"#,
     )
     .unwrap();
     std::fs::write(
         dir.join("reader.kotoba"),
         r#"(defn main []
-             (kqe-count (kqe-get-objects "kg" "alice" "kg/name")))"#,
+             (let [by-spo (kqe-get-objects "kg" "alice" "kg/name")
+                   by-query (kqe-query "kg/role")
+                   by-map (kqe-query "{:graph \"kg\" :subject \"alice\" :predicate \"kg/role\"}")
+                  by-datomic (kqe-query "{:graph \"kg\" :datomic {:find [?name] :where [[?e :kg/role \"admin\"] [?e :kg/name ?name]]}}")]
+               (+ (* 1000 (kqe-count by-datomic))
+                  (* 100 (kqe-count by-map))
+                  (* 10 (kqe-count by-spo))
+                  (kqe-count by-query))))"#,
     )
     .unwrap();
     std::fs::write(
@@ -1118,15 +1857,195 @@ fn up_threads_kqe_store_between_kotoba_components() {
         .expect("reader launched");
     assert_eq!(
         aiueos::edn::get_bare(reader, "result").and_then(|x| x.as_integer()),
+        Some(1111),
+        "reader sees writer's KQE assertion and query filters by predicate/map/datomic"
+    );
+    let audit = std::fs::read_to_string(dir.join(".aiueos/audit.edn")).expect("audit log");
+    assert!(
+        audit.contains("kotoba:kais/kqe.assert-quad kg/alice/kg/name")
+            && audit.contains("kotoba:kais/kqe.get-objects kg/alice/kg/name count=1")
+            && audit
+                .contains("kotoba:kais/kqe.query graph=None subject=None predicate=Some(\\\"kg/role\\\") count=1")
+            && audit
+                .contains("kotoba:kais/kqe.query graph=Some(\\\"kg\\\") subject=Some(\\\"alice\\\") predicate=Some(\\\"kg/role\\\") count=1")
+            && audit
+                .contains("kotoba:kais/kqe.query datomic graph=Some(\\\"kg\\\") count=1"),
+        "audit records KQE host targets: {audit}"
+    );
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn up_persists_kqe_store_between_invocations() {
+    let dir = scratch_dir("kotoba-kqe-persist");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("writer.kotoba"),
+        r#"(defn main []
+             (if (kqe-assert! "kg" "persisted" "kg/name" "v") 7 0))"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("reader.kotoba"),
+        r#"(defn main []
+             (kqe-count (kqe-get-objects "kg" "persisted" "kg/name")))"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("writer.edn"),
+        r#"{:aiueos/component :app/kqe-persist-writer
+            :aiueos/kind :app
+            :aiueos/imports #{:kotoba.graph-write/kg}
+            :aiueos/source "writer.kotoba"
+            :aiueos/entry "main"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("reader.edn"),
+        r#"{:aiueos/component :app/kqe-persist-reader
+            :aiueos/kind :app
+            :aiueos/imports #{:kotoba.graph-read/kg}
+            :aiueos/source "reader.kotoba"
+            :aiueos/entry "main"}"#,
+    )
+    .unwrap();
+    let writer_system = dir.join("writer-system.aiueos.edn");
+    std::fs::write(
+        &writer_system,
+        r#"{:aiueos/system :kqe-persist-write
+            :aiueos/components ["writer.edn"]}"#,
+    )
+    .unwrap();
+    let reader_system = dir.join("reader-system.aiueos.edn");
+    std::fs::write(
+        &reader_system,
+        r#"{:aiueos/system :kqe-persist-read
+            :aiueos/components ["reader.edn"]}"#,
+    )
+    .unwrap();
+    let policy = dir.join("policy.edn");
+    std::fs::write(
+        &policy,
+        r#"{:aiueos/grants {:app/kqe-persist-writer #{:kotoba.graph-write/kg}
+                           :app/kqe-persist-reader #{:kotoba.graph-read/kg}}}"#,
+    )
+    .unwrap();
+    let store = dir.join("kqe-store.edn");
+
+    let (code, _out, err) = aiueos(&[
+        "up",
+        writer_system.to_str().unwrap(),
+        "--policy",
+        policy.to_str().unwrap(),
+        "--kqe-store",
+        store.to_str().unwrap(),
+        "--edn",
+    ]);
+    assert_eq!(code, 0, "writer stderr: {err}");
+    let saved = std::fs::read_to_string(&store).expect("kqe store saved");
+    assert!(saved.contains("persisted"), "store contains asserted quad");
+
+    let (code, out, err) = aiueos(&[
+        "up",
+        reader_system.to_str().unwrap(),
+        "--policy",
+        policy.to_str().unwrap(),
+        "--kqe-store",
+        store.to_str().unwrap(),
+        "--edn",
+    ]);
+    assert_eq!(code, 0, "reader stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid EDN");
+    let launched = aiueos::edn::get(&v, "aiueos", "launched")
+        .and_then(|x| x.as_vector())
+        .expect("launched vector");
+    let reader = launched
+        .iter()
+        .find(|c| {
+            aiueos::edn::get_bare(c, "component").and_then(|x| x.as_string())
+                == Some("app/kqe-persist-reader")
+        })
+        .expect("reader launched");
+    assert_eq!(
+        aiueos::edn::get_bare(reader, "result").and_then(|x| x.as_integer()),
         Some(1),
-        "reader sees writer's KQE assertion"
+        "reader sees KQE data persisted by a previous up invocation"
+    );
+}
+
+#[cfg(feature = "kototama")]
+#[test]
+fn up_runs_kotoba_llm_infer_with_fixture() {
+    let dir = scratch_dir("kotoba-llm-fixture");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("agent.kotoba"),
+        r#"(defn main []
+             (str-len (llm-infer "modelA" "hello")))"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("agent.edn"),
+        r#"{:aiueos/component :app/llm-agent
+            :aiueos/kind :app
+            :aiueos/imports #{:kotoba.infer/modelA}
+            :aiueos/source "agent.kotoba"
+            :aiueos/entry "main"}"#,
+    )
+    .unwrap();
+    let system = dir.join("system.aiueos.edn");
+    std::fs::write(
+        &system,
+        r#"{:aiueos/system :llm-fixture
+            :aiueos/components ["agent.edn"]}"#,
+    )
+    .unwrap();
+    let policy = dir.join("policy.edn");
+    std::fs::write(
+        &policy,
+        r#"{:aiueos/grants {:app/llm-agent #{:kotoba.infer/modelA}}}"#,
+    )
+    .unwrap();
+    let fixture = dir.join("llm.edn");
+    std::fs::write(&fixture, r#"{:aiueos/llm {"modelA" "fixture-answer"}}"#).unwrap();
+
+    let (code, out, err) = aiueos(&[
+        "up",
+        system.to_str().unwrap(),
+        "--policy",
+        policy.to_str().unwrap(),
+        "--llm-fixture",
+        fixture.to_str().unwrap(),
+        "--edn",
+    ]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let v = kotoba_edn::parse(out.trim()).expect("valid EDN");
+    let launched = aiueos::edn::get(&v, "aiueos", "launched")
+        .and_then(|x| x.as_vector())
+        .expect("launched vector");
+    let agent = launched
+        .iter()
+        .find(|c| {
+            aiueos::edn::get_bare(c, "component").and_then(|x| x.as_string())
+                == Some("app/llm-agent")
+        })
+        .expect("agent launched");
+    assert_eq!(
+        aiueos::edn::get_bare(agent, "result").and_then(|x| x.as_integer()),
+        Some(14),
+        "llm-infer returns the fixture response bytes"
+    );
+    let audit = std::fs::read_to_string(dir.join(".aiueos/audit.edn")).expect("audit log");
+    assert!(
+        audit.contains("kotoba:kais/llm.infer model=modelA prompt-bytes=5"),
+        "audit records LLM host target: {audit}"
     );
 }
 
 #[cfg(feature = "kototama")]
 #[test]
 fn compile_manifest_reads_its_source() {
-    let dir = std::env::temp_dir().join("aiueos-cli-test");
+    let dir = scratch_dir("manifest-compile");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("m_src.clj"), "(defn main [n] (* n 3))").unwrap();
     let manifest = dir.join("m.edn");

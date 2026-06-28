@@ -8,7 +8,10 @@ use crate::graph::{CapabilityGraph, System};
 use crate::manifest::Manifest;
 use crate::policy::{self, Grant, Policy, Violation};
 #[cfg(feature = "wasm-runtime")]
-use crate::{host::KqeStore, topic::TopicBus};
+use crate::{
+    host::{CloudSurface, DomSurface, KqeStore, LlmFixtures},
+    topic::TopicBus,
+};
 #[cfg(feature = "wasm-runtime")]
 use std::path::Path;
 
@@ -32,6 +35,9 @@ pub struct LaunchOutcome {
 pub struct BootReport {
     pub system: String,
     pub launched: Vec<LaunchOutcome>,
+    pub dom_rendered: Vec<String>,
+    pub framebuffer_frames: usize,
+    pub cloud_keys: Vec<String>,
 }
 
 /// The verdict of admitting an agent-submitted component (ADR-0004). A structured
@@ -156,17 +162,57 @@ impl Broker {
     /// `:aiueos/wasm` paths resolve against. Returns the i64 the entry produced.
     #[cfg(feature = "wasm-runtime")]
     pub fn launch(&self, m: &Manifest, base: &Path, graph: &CapabilityGraph) -> Result<i64> {
+        self.launch_with_llm(m, base, graph, LlmFixtures::default())
+    }
+
+    /// Like [`launch`](Self::launch), but wires deterministic LLM fixtures into
+    /// kotoba:kais `infer` host calls for a single component run.
+    #[cfg(feature = "wasm-runtime")]
+    pub fn launch_with_llm(
+        &self,
+        m: &Manifest,
+        base: &Path,
+        graph: &CapabilityGraph,
+        llm: LlmFixtures,
+    ) -> Result<i64> {
+        self.launch_with_surfaces(
+            m,
+            base,
+            graph,
+            llm,
+            DomSurface::default(),
+            CloudSurface::default(),
+        )
+        .map(|outcome| outcome.result)
+    }
+
+    /// Like [`launch_with_llm`](Self::launch_with_llm), but also wires
+    /// deterministic browser/cloud surface state into host providers and returns
+    /// the full host outcome.
+    #[cfg(feature = "wasm-runtime")]
+    pub fn launch_with_surfaces(
+        &self,
+        m: &Manifest,
+        base: &Path,
+        graph: &CapabilityGraph,
+        llm: LlmFixtures,
+        dom: DomSurface,
+        cloud: CloudSurface,
+    ) -> Result<crate::host::HostOutcome> {
         // Capability gate (audits grant/deny internally). The conferred capability
         // set is what the host ABI enforces at call time — a fresh bus per run.
         let grant = self.verify_one(m, graph)?;
-        let (result, _bus, _kqe) = self.materialize_and_run(
+        let (outcome, _bus, _kqe, _dom, _cloud) = self.materialize_and_run(
             m,
             base,
             &grant.capabilities,
             TopicBus::new(),
             KqeStore::default(),
+            llm,
+            dom,
+            cloud,
         )?;
-        Ok(result)
+        Ok(outcome)
     }
 
     /// Code-as-data admission (ADR-0004): the front door for a component an AI
@@ -219,6 +265,65 @@ impl Broker {
         _base: &Path,
         rounds: usize,
     ) -> Result<Vec<BootReport>> {
+        self.boot_rounds_with_kqe(system, _base, rounds, KqeStore::default())
+            .map(|(reports, _kqe)| reports)
+    }
+
+    /// Like [`boot_rounds`](Self::boot_rounds), but starts from and returns a KQE
+    /// graph store so callers can persist graph state across `up` invocations.
+    #[cfg(feature = "wasm-runtime")]
+    pub fn boot_rounds_with_kqe(
+        &self,
+        system: &System,
+        _base: &Path,
+        rounds: usize,
+        initial_kqe: KqeStore,
+    ) -> Result<(Vec<BootReport>, KqeStore)> {
+        self.boot_rounds_with_kqe_and_llm(
+            system,
+            _base,
+            rounds,
+            initial_kqe,
+            LlmFixtures::default(),
+        )
+        .map(|(reports, kqe, _dom, _cloud)| (reports, kqe))
+    }
+
+    /// Like [`boot_rounds_with_kqe`](Self::boot_rounds_with_kqe), but also wires
+    /// deterministic LLM fixtures into kotoba:kais `infer` host calls.
+    #[cfg(feature = "wasm-runtime")]
+    pub fn boot_rounds_with_kqe_and_llm(
+        &self,
+        system: &System,
+        _base: &Path,
+        rounds: usize,
+        initial_kqe: KqeStore,
+        llm: LlmFixtures,
+    ) -> Result<(Vec<BootReport>, KqeStore, DomSurface, CloudSurface)> {
+        self.boot_rounds_with_kqe_llm_dom_cloud(
+            system,
+            _base,
+            rounds,
+            initial_kqe,
+            llm,
+            DomSurface::default(),
+            CloudSurface::default(),
+        )
+    }
+
+    /// Like [`boot_rounds_with_kqe_and_llm`](Self::boot_rounds_with_kqe_and_llm),
+    /// but also threads browser and cloud surface state across component launches.
+    #[cfg(feature = "wasm-runtime")]
+    pub fn boot_rounds_with_kqe_llm_dom_cloud(
+        &self,
+        system: &System,
+        _base: &Path,
+        rounds: usize,
+        initial_kqe: KqeStore,
+        llm: LlmFixtures,
+        initial_dom: DomSurface,
+        initial_cloud: CloudSurface,
+    ) -> Result<(Vec<BootReport>, KqeStore, DomSurface, CloudSurface)> {
         // Stage 1–2: capability link → topological boot order.
         let order = system.boot_order().map_err(|cycle| {
             AiueosError::Schema(format!("dependency cycle: {}", cycle.join(" → ")))
@@ -239,7 +344,9 @@ impl Broker {
         let topo_pos: std::collections::BTreeMap<usize, usize> =
             order.iter().enumerate().map(|(p, &i)| (i, p)).collect();
         let mut bus = TopicBus::new();
-        let mut kqe = KqeStore::default();
+        let mut kqe = initial_kqe;
+        let mut dom = initial_dom;
+        let mut cloud = initial_cloud;
         let mut reports = Vec::with_capacity(rounds.max(1));
         for cycle in 0..rounds.max(1) {
             let mut launched = Vec::new();
@@ -272,24 +379,29 @@ impl Broker {
                     continue;
                 }
                 let caps = caps_of.get(&m.id).unwrap_or(&empty);
-                let (result, next_bus, next_kqe) =
-                    self.materialize_and_run(m, base, caps, bus, kqe)?;
+                let (outcome, next_bus, next_kqe, next_dom, next_cloud) =
+                    self.materialize_and_run(m, base, caps, bus, kqe, llm.clone(), dom, cloud)?;
                 bus = next_bus;
                 kqe = next_kqe;
+                dom = next_dom;
+                cloud = next_cloud;
                 launched.push(LaunchOutcome {
                     component: m.id.clone(),
                     kind: m.kind.label(),
-                    result: Some(result),
+                    result: Some(outcome.result),
                 });
             }
             reports.push(BootReport {
                 system: system.name.clone(),
                 launched,
+                dom_rendered: dom.rendered().to_vec(),
+                framebuffer_frames: dom.framebuffer().len(),
+                cloud_keys: cloud.keys(),
             });
             // Next round is the next control-loop cycle: clock() advances.
             bus.advance();
         }
-        Ok(reports)
+        Ok((reports, kqe, dom, cloud))
     }
 
     /// Shared tail of launch/boot: safe-check source, compile (or load wasm), and
@@ -305,7 +417,16 @@ impl Broker {
         caps: &std::collections::BTreeSet<String>,
         bus: TopicBus,
         kqe: KqeStore,
-    ) -> Result<(i64, TopicBus, KqeStore)> {
+        llm: LlmFixtures,
+        dom: DomSurface,
+        cloud: CloudSurface,
+    ) -> Result<(
+        crate::host::HostOutcome,
+        TopicBus,
+        KqeStore,
+        DomSurface,
+        CloudSurface,
+    )> {
         // Obtain wasm: compile source (safe-checked, needs the kototama feature)
         // or load precompiled bytes / WAT text (`:aiueos/wasm`).
         let wasm: Vec<u8> = match (&m.source, &m.wasm) {
@@ -344,7 +465,7 @@ impl Broker {
             publish: m.publishes.clone(),
             subscribe: m.subscribes.clone(),
         };
-        let outcome = match crate::host::run_with_host_restricted_with_kqe(
+        let outcome = match crate::host::run_with_host_restricted_with_kqe_llm_dom_cloud(
             &wasm,
             &m.entry,
             &m.args,
@@ -353,6 +474,9 @@ impl Broker {
             caps,
             bus,
             kqe,
+            llm,
+            dom,
+            cloud,
             &topics,
             m.quota,
         ) {
@@ -372,11 +496,19 @@ impl Broker {
             Event::Run,
             &m.id,
             &format!(
-                "{}({:?}) = {} [{} host call(s)]",
-                m.entry, m.args, outcome.result, outcome.host_calls
+                "{}({:?}) = {} [{} host call(s){}]",
+                m.entry,
+                m.args,
+                outcome.result,
+                outcome.host_calls,
+                host_event_detail(&outcome.host_events)
             ),
         )?;
-        Ok((outcome.result, outcome.bus, outcome.kqe))
+        let bus = outcome.bus.clone();
+        let kqe = outcome.kqe.clone();
+        let dom = outcome.dom.clone();
+        let cloud = outcome.cloud.clone();
+        Ok((outcome, bus, kqe, dom, cloud))
     }
 
     /// Compile a component's `:aiueos/source` (safe-checked) to wasm. Requires the
@@ -420,5 +552,19 @@ impl Broker {
             "compiling :aiueos/source ({src_rel}) requires the `kototama` feature; \
              use :aiueos/wasm for precompiled/WAT components"
         )))
+    }
+}
+
+#[cfg(feature = "wasm-runtime")]
+fn host_event_detail(events: &[String]) -> String {
+    if events.is_empty() {
+        return String::new();
+    }
+    let shown = events.iter().take(6).cloned().collect::<Vec<_>>();
+    let more = events.len().saturating_sub(shown.len());
+    if more == 0 {
+        format!("; {}", shown.join("; "))
+    } else {
+        format!("; {}; +{more} more", shown.join("; "))
     }
 }

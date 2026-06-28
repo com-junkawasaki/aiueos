@@ -63,6 +63,7 @@ pub mod policy;
 pub mod safe;
 pub mod surface;
 pub mod topic;
+pub mod virtio;
 
 #[cfg(feature = "wasm-runtime")]
 pub mod host;

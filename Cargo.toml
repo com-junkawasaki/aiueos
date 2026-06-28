@@ -14,6 +14,8 @@ path = "src/bin/aiueos.rs"
 # Git dependency so a standalone clone builds without the monorepo. Local dev can
 # override to the in-tree copy via .cargo/config.toml (paths override).
 kotoba-edn = { git = "https://github.com/com-junkawasaki/kotoba", branch = "main", package = "kotoba-edn" }
+kotoba-core = { git = "https://github.com/com-junkawasaki/kotoba", branch = "main", package = "kotoba-core", optional = true }
+kotoba-datomic = { git = "https://github.com/com-junkawasaki/kotoba", branch = "main", package = "kotoba-datomic", optional = true }
 # CLJ/Kotoba source compiler. The feature is still named `kototama` for the
 # public aiueos surface, but the implementation is the maintained kotoba-clj
 # compiler crate. Optional so standalone users can keep the lightweight WAT/wasm
@@ -50,4 +52,4 @@ ed25519-dalek = { version = "2", optional = true }
 default = ["wasm-runtime", "signing"]
 wasm-runtime = ["dep:wasmtime", "dep:anyhow", "dep:sha2"]
 signing = ["dep:ed25519-dalek"]
-kototama = ["wasm-runtime", "dep:kotoba-clj"]
+kototama = ["wasm-runtime", "dep:kotoba-clj", "dep:kotoba-core", "dep:kotoba-datomic"]

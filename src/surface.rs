@@ -305,7 +305,9 @@ mod tests {
         let h = Surface::computer_host();
         assert!(h.provider("pointer/host").is_some());
         assert!(h.provider("pointer/move").is_some());
-        assert!(is_known("computer-virtual") && is_known("computer-vm") && is_known("computer-host"));
+        assert!(
+            is_known("computer-virtual") && is_known("computer-vm") && is_known("computer-host")
+        );
     }
 
     #[test]

@@ -25,7 +25,7 @@ kotoba-datomic = { git = "https://github.com/com-junkawasaki/kotoba", branch = "
 kotoba-clj = { git = "https://github.com/com-junkawasaki/kotoba", branch = "main", package = "kotoba-clj", default-features = false, optional = true }
 # Execution engine — the broker enforces fuel + memory-page limits here. Version
 # pinned to kotoba's workspace (22) so the build is shared, not duplicated.
-wasmtime = { version = "22", optional = true }
+wasmtime = { version = "24", optional = true }
 # Host-function trap errors (wasmtime's error type). Already in the wasmtime tree.
 anyhow = { version = "1", optional = true }
 # wasm artifact integrity (:aiueos/wasm-sha256 tamper check). Tiny, pure-Rust.

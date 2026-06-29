@@ -30,9 +30,12 @@ OS を「プロセスの集合」ではなく
   architecture for containment, not a claim of invulnerability.)
 - **One model, many surfaces.** The substrate is just *components + capabilities
   + manifests + audit* over Wasm, so the same component runs wherever a Wasm
-  engine does: **edge, robotics, cloud, browser, client**. Capabilities differ
-  per deployment (a robot grants `topic/*` + device buses; a browser grants
-  DOM/fetch shims) but the meaning model and the gate do not.
+  engine does: **edge, robotics, cloud, browser, client, computer-use**.
+  Capabilities differ per deployment (a robot grants `topic/*` + device buses; a
+  browser grants DOM/fetch shims) but the meaning model and the gate do not. The
+  **`computer-use` surface** (ADR-0007) drives a screen with synthetic input from an
+  **isolated container by default** — so an agent can run a browser without ever
+  touching the operator's keyboard/mouse/display (no host-HID provider is offered).
 - **Code as data, AI-agent-native.** Components are *kotoba* — data the OS
   reasons over. An AI agent can author a component, and the OS treats it as
   `:ai-generated`: untrusted, ephemeral, denied network/secrets/persistence by
@@ -192,7 +195,7 @@ aiueos run     <manifest>.edn        [--policy p.edn] [--system s.edn] [--surfac
 aiueos image build <system>.edn      --aiueos-bin <linux-bin> [--policy p.edn] [--out initramfs.cpio.gz] [--dry-run] [--edn]
 aiueos vm up   <system>.edn          [--policy p.edn] [--name N] [--provider auto|lima] [--dry-run] [--edn]   run through a Mac microVM provider
 aiueos vm boot <system>.edn          --kernel Image --aiueos-bin <linux-bin> [--policy p.edn] [--block raw.img] [--console pl011|virtio-console] [--console-socket path] [--graphics none|virtio-gpu] [--display cocoa|gtk|sdl] [--dry-run] [--edn]   boot kernel+initramfs
-aiueos surface inspect <id>          [--edn]                         inspect robot|browser|cloud providers
+aiueos surface inspect <id>          [--edn]                         inspect robot|browser|cloud|computer-virtual|computer-vm|computer-host providers
 aiueos compile <source.clj|manifest> [-o out.wasm]                   CLJ/Kotoba → wasm (kototama feature)
 aiueos check   <source.clj>                                          safe-kotoba subset gate
 aiueos hash    <file> [--edn]                                        sha256 for :aiueos/wasm-sha256

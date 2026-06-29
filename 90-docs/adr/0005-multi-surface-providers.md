@@ -185,6 +185,9 @@ fail-loud stance. Surface ids themselves are a closed set the broker knows;
 | `cloud`   | `storage/kv`, `net/fetch`, `log/write`, `clock/monotonic`, `random/bytes` | a KV store broker + a socket/HTTP broker |
 | `edge`    | `topic/*`, `storage/kv`, `clock/monotonic`, `log/write`           | a constrained subset of robot ∪ cloud |
 | `client`  | `dom/render`, `storage/kv`, `log/write`                           | local UI + local persistence          |
+| `computer-virtual` | `display/frame`, `pointer/move`, `pointer/click`, `keyboard/key`, `keyboard/type`, `net/fetch`, `log/write`, `clock/monotonic` | **isolated container (Xvfb/headless Chromium) — exists today** (ADR-0007). The capability-isolated computer-use surface; **no host-HID provider** is offered. |
+| `computer-vm` | same offered set as `computer-virtual` | a microVM (virtio-gpu) for GPU-accurate runs — future (ADR-0007) |
+| `computer-host` | `computer-virtual` ∪ `pointer/host`, `keyboard/host`, `display/host` | the host WindowServer — the **signed, opt-in** escape hatch; host-HID providers stay unbound by default (ADR-0007) |
 
 Each new provider is one `func_wrap` closure that calls `gate()` first — the
 robot's seven are the template. A surface that lacks a provider for a cap simply

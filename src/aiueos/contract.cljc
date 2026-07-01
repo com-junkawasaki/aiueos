@@ -25,6 +25,9 @@
 (def audit-events
   #{:grant :deny :compile :run :reject})
 
+(def adapter-kinds
+  #{:wasm-executor :browser-surface :vm-boot :filesystem :signing :audit-sink})
+
 (def manifest-required-keys
   #{:aiueos/component :aiueos/kind})
 
@@ -71,8 +74,26 @@
 (def violation-required-keys
   #{:aiueos/kind :aiueos/message})
 
+(def host-adapter-required-keys
+  #{:aiueos.adapter/id
+    :aiueos.adapter/kind
+    :aiueos.adapter/consumes
+    :aiueos.adapter/provides})
+
+(def host-adapter-optional-keys
+  #{:aiueos.adapter/repository
+    :aiueos.adapter/status
+    :aiueos.adapter/native?
+    :aiueos.adapter/detail})
+
+(def host-adapter-keys
+  (set/union host-adapter-required-keys host-adapter-optional-keys))
+
 (defn- aiueos-key? [k]
   (and (keyword? k) (= "aiueos" (namespace k))))
+
+(defn- aiueos-adapter-key? [k]
+  (and (keyword? k) (= "aiueos.adapter" (namespace k))))
 
 (defn- component-id? [x]
   (or (keyword? x)
@@ -103,6 +124,10 @@
 (defn- unknown-aiueos-key-errors [m allowed]
   (mapv #(err [%] "unknown :aiueos/* key")
         (sort (filter #(and (aiueos-key? %) (not (contains? allowed %))) (keys m)))))
+
+(defn- unknown-aiueos-adapter-key-errors [m allowed]
+  (mapv #(err [%] "unknown :aiueos.adapter/* key")
+        (sort (filter #(and (aiueos-adapter-key? %) (not (contains? allowed %))) (keys m)))))
 
 (defn- field-error [m k pred message]
   (when (and (contains? m k) (not (pred (get m k))))
@@ -271,3 +296,36 @@
 
 (defn audit-event? [e]
   (:valid? (validate-audit-event e)))
+
+(defn validate-host-adapter
+  "Validate a host adapter declaration.
+
+  Native execution is allowed only as an explicitly adapter-owned target that
+  consumes the CLJC/EDN authority contracts from this repository."
+  [adapter]
+  (let [errors
+        (if-not (map? adapter)
+          [(err [] "host adapter must be a map")]
+          (collect-errors
+           (missing-errors adapter host-adapter-required-keys)
+           (unknown-aiueos-adapter-key-errors adapter host-adapter-keys)
+           (field-error adapter :aiueos.adapter/id keyword?
+                        ":aiueos.adapter/id must be a keyword")
+           (field-error adapter :aiueos.adapter/kind adapter-kinds
+                        ":aiueos.adapter/kind must be a known adapter kind")
+           (field-error adapter :aiueos.adapter/consumes kw-set?
+                        ":aiueos.adapter/consumes must be a keyword set")
+           (field-error adapter :aiueos.adapter/provides kw-set?
+                        ":aiueos.adapter/provides must be a keyword set")
+           (field-error adapter :aiueos.adapter/repository string?
+                        ":aiueos.adapter/repository must be a string")
+           (field-error adapter :aiueos.adapter/status keyword?
+                        ":aiueos.adapter/status must be a keyword")
+           (field-error adapter :aiueos.adapter/native? boolean?
+                        ":aiueos.adapter/native? must be a boolean")
+           (field-error adapter :aiueos.adapter/detail string?
+                        ":aiueos.adapter/detail must be a string")))]
+    (valid-result errors)))
+
+(defn host-adapter? [adapter]
+  (:valid? (validate-host-adapter adapter)))

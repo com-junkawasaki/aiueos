@@ -22,6 +22,8 @@ The authority layer is deliberately data-only:
 - grant or deny policy decisions with explicit violation shapes
 - append-only audit events that can be emitted by authority or host adapters
 - EDN fixtures for systems, browser surfaces, robotics, computer-use, and policy examples
+- explicit host adapter declarations for native execution, VM boot, browser
+  surfaces, signing, filesystems, and audit sinks
 
 ## Source Layout
 

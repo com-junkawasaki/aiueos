@@ -66,6 +66,27 @@
       (is (some #(= [:aiueos/event] (:path %)) (:errors result)))
       (is (some #(= [:aiueos/detail] (:path %)) (:errors result))))))
 
+(deftest host-adapter-contract
+  (testing "validates native host adapters as explicit contract consumers"
+    (is (contract/host-adapter?
+         {:aiueos.adapter/id :adapter/wasm-executor
+          :aiueos.adapter/kind :wasm-executor
+          :aiueos.adapter/consumes #{:aiueos/manifest :aiueos/policy-decision}
+          :aiueos.adapter/provides #{:aiueos/run-result :aiueos/audit-event}
+          :aiueos.adapter/repository "kotoba-lang/aiueos-wasm-adapter"
+          :aiueos.adapter/status :planned
+          :aiueos.adapter/native? true})))
+  (testing "rejects incomplete or implicit adapter declarations"
+    (let [result (contract/validate-host-adapter
+                  {:aiueos.adapter/id "native"
+                   :aiueos.adapter/kind :rust
+                   :aiueos.adapter/provides []})]
+      (is (false? (:valid? result)))
+      (is (some #(= [:aiueos.adapter/id] (:path %)) (:errors result)))
+      (is (some #(= [:aiueos.adapter/kind] (:path %)) (:errors result)))
+      (is (some #(= [:aiueos.adapter/consumes] (:path %)) (:errors result)))
+      (is (some #(= [:aiueos.adapter/provides] (:path %)) (:errors result))))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'aiueos.contract-test)
         failures (+ (or fail 0) (or error 0))]

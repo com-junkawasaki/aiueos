@@ -23,3 +23,11 @@ jobs:
         run: clojure -M:test
       - name: babashka smoke
         run: bb test:cljc
+      - name: ensure Rust files stay out
+        run: |
+          if find . \
+            \( -name Cargo.toml -o -name Cargo.lock -o -name '*.rs' -o -name 'rust-toolchain*' -o -path './.cargo/*' \) \
+            -print -quit | grep -q .; then
+            find . \( -name Cargo.toml -o -name Cargo.lock -o -name '*.rs' -o -name 'rust-toolchain*' -o -path './.cargo/*' \) -print
+            exit 1
+          fi

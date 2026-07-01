@@ -1,6 +1,6 @@
 (ns aiueos.contract-test
   (:require [aiueos.contract :as contract]
-            [clojure.test :refer [deftest is testing]]))
+            [clojure.test :refer [deftest is run-tests testing]]))
 
 (def minimal-manifest
   {:aiueos/component :service/log
@@ -65,3 +65,11 @@
       (is (some #(= [:aiueos/ts] (:path %)) (:errors result)))
       (is (some #(= [:aiueos/event] (:path %)) (:errors result)))
       (is (some #(= [:aiueos/detail] (:path %)) (:errors result))))))
+
+(defn -main [& _]
+  (let [{:keys [fail error]} (run-tests 'aiueos.contract-test)
+        failures (+ (or fail 0) (or error 0))]
+    (when (pos? failures)
+      #?(:clj (System/exit 1)
+         :cljs (throw (ex-info "aiueos contract tests failed"
+                               {:fail fail :error error}))))))

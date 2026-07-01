@@ -1,57 +1,48 @@
 # Rust Migration
 
-`aiueos` is currently a Rust crate that models component manifests, capability
-graphs, policy reasoning, safe checks, audit logs, topic buses, and optional wasm
-execution. The target architecture is Kotoba/CLJC as the semantic authority with
-native execution hidden behind host adapters.
+`aiueos` no longer carries a Rust crate or Cargo workspace. The repository is now
+the Kotoba/CLJC semantic authority for component manifests, capability policy
+decisions, audit events, and the EDN shapes that host adapters must consume.
 
-## Current Rust Surface
+## Removed Rust Surface
 
 | module | role | target |
 |---|---|---|
-| `manifest` | component/system EDN parsing | CLJC schema and parser contract |
-| `graph` | capability graph projection | CLJC pure data transform |
-| `policy` | grants/effects/DMA/device policy | CLJC policy engine |
-| `broker` | verify/compile/run orchestration | CLJC orchestration contract plus host adapter |
-| `safe` | safe-kotoba subset gate | Kotoba/CLJC language gate |
-| `audit` | append-only EDN audit log | CLJC audit event schema |
-| `topic` | in-process topic bus | CLJC protocol contract; host-specific transport adapters |
-| `host` / `runtime` | wasm execution and host ABI | native backend adapter only |
+| `Cargo.toml` / `Cargo.lock` | Rust package metadata | removed |
+| `src/*.rs` | Rust manifest, graph, policy, broker, host, runtime modules | removed |
+| `src/bin/aiueos.rs` | Rust CLI entry point | removed |
+| `tests/*.rs` | Cargo integration tests | removed |
+| `scripts/*.bb` | QEMU/Rust binary smoke helpers | removed |
 
-## Target Boundary
+## Current Authority
 
 Authoritative:
 
-- manifest schema
-- capability graph semantics
-- policy reasoner rules
-- safe-kotoba gate contract
+- manifest schema contract
+- policy decision contract
 - audit event schema
-- topic protocol
-- broker state machine
+- shared EDN examples and fixtures
 
 Host adapter only:
 
-- `wasmtime`
+- Wasm execution
 - artifact hash calculation
 - ed25519 verification implementation
-- filesystem/CLI execution
+- filesystem, VM, browser, and CLI execution
 - native process lifecycle
 
-## CLJC Authority Seed
+## CLJC Authority
 
 `src/aiueos/contract.cljc` now defines the first pure CLJC contract for the
 shared authority layer: validators for a minimal component manifest, policy
 decision, and audit event. The contract is intentionally data-only so Rust,
-Kotoba, and other host adapters can conform to the same EDN shapes while runtime
-behavior migrates incrementally.
+Kotoba, and other host adapters can conform to the same EDN shapes outside this
+repository.
 
-## Migration Steps
+## Policy
 
-1. Extract manifest, graph, policy, audit, topic, and broker contracts to CLJC.
-2. Keep Rust as a compatibility CLI/runtime host that consumes those contracts.
-3. Replace Rust-only policy decisions with CLJC pure functions and conformance
-   tests.
-4. Generate or mechanically mirror host adapter structs from CLJC schemas.
-5. Retire the Rust crate once Kotoba-native CLI/runtime can launch the same
-   component graph.
+1. No `Cargo.toml`, `Cargo.lock`, `.rs`, or Rust toolchain files in the default
+   authority repository.
+2. Runtime backends live in separate host adapter repositories and consume these
+   CLJC/EDN contracts.
+3. CI validates the CLJC contract with `clojure -M:test` and `bb test:cljc`.

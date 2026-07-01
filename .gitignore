@@ -1,5 +1,5 @@
-/target
-# audit logs written by `aiueos run/verify`
+# audit logs written by host adapters that consume the CLJC contracts.
 .aiueos/
 **/.aiueos/
 *.wasm
+.cpcache/

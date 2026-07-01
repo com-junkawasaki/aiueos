@@ -3,40 +3,4 @@
  {
   test:cljc
   {:doc "Run the pure CLJC authority contract tests."
-   :task (do
-           (require 'aiueos.contract-test)
-           (clojure.test/run-tests 'aiueos.contract-test))}
-
-  linux:build
-  {:doc "Build the Linux/aarch64 static aiueos /init binary."
-   :task (shell "bb" "scripts/build-linux-aarch64.bb")}
-
-  kernel:fetch
-  {:doc "Fetch the aarch64 virt kernel used by local QEMU/HVF boot."
-   :task (shell "bb" "scripts/fetch-aarch64-virt-kernel.bb")}
-
-  robot:boot
-  {:doc "Build and boot the robot example as /init in a QEMU aarch64 VM."
-   :task (shell "bb" "scripts/boot-robot-aarch64.bb")}
-
-  robot:smoke
-  {:doc "Boot the robot VM, wait for aiueos PID 1 idle, then stop QEMU."
-   :task (shell "bb" "scripts/smoke-robot-aarch64.bb")}
-
-  robot:block-smoke
-  {:doc "Boot the robot VM with a virtio-blk raw backing file, then stop QEMU."
-   :task (shell "bb" "scripts/smoke-robot-block-aarch64.bb")}
-
-  robot:console-smoke
-  {:doc "Boot the robot VM with a virtio-console device exposed, then stop QEMU."
-   :task (shell {:extra-env {"AIUEOS_CONSOLE" "virtio-console"}}
-                "bb" "scripts/smoke-robot-aarch64.bb")}
-
-  test:cli
-  {:doc "Run the aiueos CLI integration tests with the host target override."
-   :task (let [host (:out (shell {:out :string} "rustc" "-vV"))
-               host-pattern (re-pattern "^host: (.+)$")
-               target (some (fn [line] (second (re-find host-pattern line)))
-                            (clojure.string/split-lines host))]
-           (shell {:extra-env {"CARGO_TARGET_DIR" "/tmp/aiueos-datomic-target"}}
-                  "cargo" "test" "--target" target "--features" "kototama" "--test" "cli"))}}}
+   :task (shell "clojure" "-M:test")}}}

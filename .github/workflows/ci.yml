@@ -5,34 +5,21 @@ on:
     branches: [main]
   pull_request:
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   test:
-    name: test (core + exec)
+    name: cljc authority
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # The semantic core: manifest / capability graph / policy / broker /
-      # safe-kotoba / audit / topic bus. Zero heavy deps.
-      - name: core (no features)
-        run: cargo test --no-default-features --verbose
-      # Execution + the aiueos:host ABI + the robotics pipeline (WAT components).
-      # Needs only wasmtime — not the kototama CLJ compiler.
-      - name: exec + robotics (wasm-runtime)
-        run: cargo test --no-default-features --features wasm-runtime --verbose
-    # Note: the `kototama` feature (CLJ→wasm compilation) is intentionally not run
-    # in CI — kototama resolves only inside the monorepo (path deps to siblings).
-
-  fmt:
-    name: rustfmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-java@v4
         with:
-          components: rustfmt
-      - run: cargo fmt --all --check
+          distribution: temurin
+          java-version: "21"
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+          bb: latest
+      - name: clojure tests
+        run: clojure -M:test
+      - name: babashka smoke
+        run: bb test:cljc

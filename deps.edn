@@ -1,3 +1,7 @@
-{:paths ["src" "test"]
+{:paths ["src" "resources"]
  :aliases
- {:test {:main-opts ["-m" "aiueos.contract-test"]}}}
+ {:test {:extra-paths ["test"]
+         :extra-deps {io.github.cognitect-labs/test-runner
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+         :main-opts ["-m" "cognitect.test-runner"]
+         :exec-fn cognitect.test-runner.api/test}}}

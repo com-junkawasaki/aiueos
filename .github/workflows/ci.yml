@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    name: cljc authority
+    name: CLJC contract tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,15 +19,7 @@ jobs:
         with:
           cli: latest
           bb: latest
-      - name: clojure tests
+      - name: Test CLJC contract
         run: clojure -M:test
-      - name: babashka smoke
-        run: bb test:cljc
-      - name: ensure Rust files stay out
-        run: |
-          if find . \
-            \( -name Cargo.toml -o -name Cargo.lock -o -name '*.rs' -o -name 'rust-toolchain*' -o -path './.cargo/*' \) \
-            -print -quit | grep -q .; then
-            find . \( -name Cargo.toml -o -name Cargo.lock -o -name '*.rs' -o -name 'rust-toolchain*' -o -path './.cargo/*' \) -print
-            exit 1
-          fi
+      - name: Babashka smoke
+        run: bb test

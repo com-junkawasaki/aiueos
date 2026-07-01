@@ -1,59 +1,22 @@
-# aiueos
+# aiueos-cljc-contract
 
-`aiueos` is the Kotoba/CLJC authority layer for a capability-secure component
-operating-system model.
+CLJC/EDN authority contracts for aiueos.
 
-The repository defines EDN-first contracts for component manifests, policy
-decisions, and audit events. Runtime implementations, native execution, Wasm
-engines, VM boot flows, browser adapters, and CLI process management live in
-host adapter repositories and consume these contracts.
+This repository owns the semantic shapes for aiueos manifests, policy
+decisions, grants, audit events, run plans, run receipts, and the
+`aiueos/component` Wasm Component Model boundary.
 
-## Model
+Rust, JavaScript, Python, Svelte, or host-specific code may consume these
+contracts as adapters/providers elsewhere, but they are not authority here.
 
-```text
-kotoba   = meaning, structure, policy, and capability data
-aiueos   = CLJC contracts for component OS authority
-adapters = host-specific execution that conforms to those contracts
-```
+## Contract Data
 
-The authority layer is deliberately data-only:
+- `src/aiueos/contract.cljc` validates the pure aiueos data contracts.
+- `resources/aiueos/component_boundary.edn` owns the component imports/exports.
+- `test/aiueos/contract_test.cljc` checks the CLJC validator and EDN boundary.
 
-- component identity, kind, trust, entry, args, imports, exports, effects, and limits
-- grant or deny policy decisions with explicit violation shapes
-- signer lifecycle policy contracts for revocation, expiry, and signed-admission
-  requirements
-- append-only audit events that can be emitted by authority or host adapters
-- EDN fixtures for systems, browser surfaces, robotics, computer-use, and policy examples
-- explicit host adapter declarations for native execution, VM boot, browser
-  surfaces, signing, filesystems, and audit sinks
-
-## Source Layout
-
-| path | role |
-|---|---|
-| `src/aiueos/contract.cljc` | shared CLJC contract and validators |
-| `test/aiueos/contract_test.cljc` | conformance tests for the contract |
-| `examples/` | EDN/WAT fixtures consumed by adapters and docs |
-| `docs/` | architecture notes and migration status |
-
-Deployment security claim profiles are tracked in
-[`docs/deployment-profiles.md`](docs/deployment-profiles.md).
-
-## Development
-
-Run the authority contract tests:
+## Verify
 
 ```bash
-clojure -M:test
 bb test:cljc
 ```
-
-## Rust Status
-
-The former Rust crate, Cargo metadata, Rust CLI, and QEMU/Rust smoke scripts have
-been removed from this repository. `aiueos` should not contain `Cargo.toml`,
-`Cargo.lock`, `.rs`, or Rust toolchain files on the default path.
-
-If a host needs Wasm execution, signing, VM boot, filesystem access, or process
-lifecycle management, implement it as an adapter that reads and writes the
-CLJC/EDN contracts defined here.

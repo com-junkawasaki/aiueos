@@ -1,10 +1,54 @@
 (ns aiueos.contract
-  "Pure CLJC authority contract for the first aiueos Rust migration slice.
+  "Pure CLJC authority contract for aiueos.
 
   The namespace intentionally validates plain EDN maps without depending on a
-  runtime host. It is small by design: enough to pin the shared manifest,
-  policy-decision, and audit-event shapes before behavior migrates from Rust."
-  (:require [clojure.set :as set]))
+  runtime host. Rust, JS, Python, Svelte, and host-specific code may provide
+  adapters elsewhere, but this namespace owns the data authority."
+  (:require [clojure.set :as set]
+            #?(:clj [clojure.edn :as edn])
+            #?(:clj [clojure.java.io :as io])))
+
+(def component-boundary-resource
+  "Classpath resource that owns the aiueos/component Wasm boundary."
+  "aiueos/component_boundary.edn")
+
+(def policy-contract-resource
+  "Classpath resource that owns aiueos policy decision tables."
+  "aiueos/policy_contract.edn")
+
+(def broker-contract-resource
+  "Classpath resource that owns aiueos broker run-plan flow."
+  "aiueos/broker_contract.edn")
+
+#?(:clj
+   (defn load-component-boundary
+     "Load the EDN authority for the aiueos/component boundary."
+     []
+     (let [resource (io/resource component-boundary-resource)]
+       (when-not resource
+         (throw (ex-info "missing aiueos component boundary resource"
+                         {:resource component-boundary-resource})))
+       (-> resource slurp edn/read-string))))
+
+#?(:clj
+   (defn load-policy-contract
+     "Load the EDN authority for aiueos policy contracts."
+     []
+     (let [resource (io/resource policy-contract-resource)]
+       (when-not resource
+         (throw (ex-info "missing aiueos policy contract resource"
+                         {:resource policy-contract-resource})))
+       (-> resource slurp edn/read-string))))
+
+#?(:clj
+   (defn load-broker-contract
+     "Load the EDN authority for aiueos broker flow contracts."
+     []
+     (let [resource (io/resource broker-contract-resource)]
+       (when-not resource
+         (throw (ex-info "missing aiueos broker contract resource"
+                         {:resource broker-contract-resource})))
+       (-> resource slurp edn/read-string))))
 
 (def manifest-kinds
   #{:app :service :driver :broker :agent :kernel-extension :compat})
@@ -14,9 +58,6 @@
 
 (def policy-decisions
   #{:grant :deny})
-
-(def signer-statuses
-  #{:active :retired :revoked :expired :compromised :suspended})
 
 (def violation-kinds
   #{:unresolved-capability
@@ -28,8 +69,35 @@
 (def audit-events
   #{:grant :deny :compile :run :reject})
 
-(def adapter-kinds
-  #{:wasm-executor :browser-surface :vm-boot :filesystem :signing :audit-sink})
+(def run-statuses
+  #{:planned :started :succeeded :denied :failed})
+
+(def component-directions
+  #{:import :export})
+
+(def component-boundary-required-keys
+  #{:aiueos/world :aiueos/imports :aiueos/exports})
+
+(def component-boundary-optional-keys
+  #{:aiueos/contract :aiueos/wit :aiueos/adapter})
+
+(def component-boundary-keys
+  (set/union component-boundary-required-keys component-boundary-optional-keys))
+
+(def required-component-imports
+  #{:host/wasm-runner :host/filesystem :host/process :host/device :host/audit-sink})
+
+(def required-component-exports
+  #{:aiueos/verify :aiueos/inspect :aiueos/admit :aiueos/run-plan})
+
+(def component-port-required-keys
+  #{:aiueos/name :aiueos/direction})
+
+(def component-port-optional-keys
+  #{:aiueos/request :aiueos/response :aiueos/capability :aiueos/detail})
+
+(def component-port-keys
+  (set/union component-port-required-keys component-port-optional-keys))
 
 (def manifest-required-keys
   #{:aiueos/component :aiueos/kind})
@@ -68,14 +136,6 @@
 (def policy-decision-keys
   (set/union policy-decision-required-keys policy-decision-optional-keys))
 
-(def policy-optional-keys
-  #{:aiueos/signers
-    :aiueos/signer-status
-    :aiueos/require-signed})
-
-(def policy-keys
-  policy-optional-keys)
-
 (def audit-event-required-keys
   #{:aiueos/ts :aiueos/event :aiueos/component :aiueos/detail})
 
@@ -85,30 +145,125 @@
 (def violation-required-keys
   #{:aiueos/kind :aiueos/message})
 
-(def host-adapter-required-keys
-  #{:aiueos.adapter/id
-    :aiueos.adapter/kind
-    :aiueos.adapter/consumes
-    :aiueos.adapter/provides})
+(def grant-required-keys
+  #{:aiueos/subject :aiueos/audience :aiueos/component :aiueos/capabilities})
 
-(def host-adapter-optional-keys
-  #{:aiueos.adapter/repository
-    :aiueos.adapter/status
-    :aiueos.adapter/native?
-    :aiueos.adapter/detail})
+(def grant-optional-keys
+  #{:aiueos/manifest-cid
+    :aiueos/wasm-cid
+    :aiueos/limits
+    :aiueos/not-before
+    :aiueos/expires-at
+    :aiueos/parent
+    :aiueos/proof})
 
-(def host-adapter-keys
-  (set/union host-adapter-required-keys host-adapter-optional-keys))
+(def grant-keys
+  (set/union grant-required-keys grant-optional-keys))
+
+(def run-plan-required-keys
+  #{:aiueos/component :aiueos/manifest :aiueos/decision})
+
+(def run-plan-optional-keys
+  #{:aiueos/grant
+    :aiueos/component-boundary
+    :aiueos/entry
+    :aiueos/args
+    :aiueos/limits
+    :aiueos/imports
+    :aiueos/audit-events
+    :aiueos/detail})
+
+(def run-plan-keys
+  (set/union run-plan-required-keys run-plan-optional-keys))
+
+(def run-receipt-required-keys
+  #{:aiueos/component :aiueos/status :aiueos/audit-events})
+
+(def run-receipt-optional-keys
+  #{:aiueos/result
+    :aiueos/error
+    :aiueos/started-at
+    :aiueos/finished-at
+    :aiueos/run-cid
+    :aiueos/input-cid
+    :aiueos/output-cid
+    :aiueos/detail})
+
+(def run-receipt-keys
+  (set/union run-receipt-required-keys run-receipt-optional-keys))
+
+(def policy-contract-required-keys
+  #{:aiueos.policy/id :aiueos.policy/authority :aiueos.policy/source-files
+    :aiueos.policy/kernel-caps :aiueos.policy/forbid
+    :aiueos.policy/decision-shapes :aiueos.policy/violation-kinds
+    :aiueos.policy/signer-statuses :aiueos.policy/effects
+    :aiueos.policy/grant-fields})
+
+(def policy-contract-keys
+  policy-contract-required-keys)
+
+(def system-required-keys
+  #{:aiueos/system :aiueos/components})
+
+(def system-optional-keys
+  #{:aiueos/detail})
+
+(def system-keys
+  (set/union system-required-keys system-optional-keys))
+
+(def deployment-policy-optional-keys
+  #{:aiueos/policy
+    :aiueos/surface
+    :aiueos/kernel-caps
+    :aiueos/grants
+    :aiueos/forbid
+    :aiueos/net-allow
+    :aiueos/signers
+    :aiueos/require-signed})
+
+(def deployment-policy-keys
+  deployment-policy-optional-keys)
+
+(def broker-contract-required-keys
+  #{:aiueos.broker/id :aiueos.broker/authority :aiueos.broker/source-files
+    :aiueos.broker/policy :aiueos.broker/component-boundary
+    :aiueos.broker/flows :aiueos.broker/audit-events
+    :aiueos.broker/run-statuses})
+
+(def broker-contract-keys
+  broker-contract-required-keys)
+
+(def broker-flow-required-keys
+  #{:aiueos.broker/name :aiueos.broker/input :aiueos.broker/output
+    :aiueos.broker/steps})
+
+(def broker-flow-keys
+  broker-flow-required-keys)
+
+(def broker-flow-names
+  #{:verify-system :verify-one :run-plan :run-receipt})
+
+(def broker-inputs
+  #{:aiueos/system :aiueos/manifest :aiueos/run-plan})
+
+(def broker-outputs
+  #{:aiueos/policy-decision :aiueos/run-plan :aiueos/run-receipt})
 
 (defn- aiueos-key? [k]
   (and (keyword? k) (= "aiueos" (namespace k))))
 
-(defn- aiueos-adapter-key? [k]
-  (and (keyword? k) (= "aiueos.adapter" (namespace k))))
+(defn- aiueos-policy-key? [k]
+  (and (keyword? k) (= "aiueos.policy" (namespace k))))
+
+(defn- aiueos-broker-key? [k]
+  (and (keyword? k) (= "aiueos.broker" (namespace k))))
 
 (defn- component-id? [x]
   (or (keyword? x)
       (and (string? x) (not (empty? x)))))
+
+(defn- port-name? [x]
+  (component-id? x))
 
 (defn- kw-set? [x]
   (and (set? x) (every? keyword? x)))
@@ -125,6 +280,9 @@
 (defn- non-negative-integer? [x]
   (and (int? x) (not (neg? x))))
 
+(defn- string-or-keyword? [x]
+  (or (string? x) (keyword? x)))
+
 (defn- err [path message]
   {:path path :message message})
 
@@ -136,23 +294,17 @@
   (mapv #(err [%] "unknown :aiueos/* key")
         (sort (filter #(and (aiueos-key? %) (not (contains? allowed %))) (keys m)))))
 
-(defn- unknown-aiueos-adapter-key-errors [m allowed]
-  (mapv #(err [%] "unknown :aiueos.adapter/* key")
-        (sort (filter #(and (aiueos-adapter-key? %) (not (contains? allowed %))) (keys m)))))
+(defn- unknown-policy-key-errors [m allowed]
+  (mapv #(err [%] "unknown :aiueos.policy/* key")
+        (sort (filter #(and (aiueos-policy-key? %) (not (contains? allowed %))) (keys m)))))
+
+(defn- unknown-broker-key-errors [m allowed]
+  (mapv #(err [%] "unknown :aiueos.broker/* key")
+        (sort (filter #(and (aiueos-broker-key? %) (not (contains? allowed %))) (keys m)))))
 
 (defn- field-error [m k pred message]
   (when (and (contains? m k) (not (pred (get m k))))
     (err [k] message)))
-
-(defn- signer-map? [x]
-  (and (map? x)
-       (every? keyword? (keys x))
-       (every? string? (vals x))))
-
-(defn- signer-status-map? [x]
-  (and (map? x)
-       (every? keyword? (keys x))
-       (every? signer-statuses (vals x))))
 
 (defn- collect-errors [& xs]
   (vec (remove nil? (mapcat #(if (sequential? %) % [%]) xs))))
@@ -163,6 +315,27 @@
 (defn- valid-result [errors]
   {:valid? (empty? errors)
    :errors errors})
+
+(defn- non-empty-string? [x]
+  (and (string? x) (not (empty? x))))
+
+(defn- string-vector? [x]
+  (and (vector? x) (every? non-empty-string? x)))
+
+(defn- keyword-vector? [x]
+  (and (vector? x) (every? keyword? x)))
+
+(defn- keyword-set? [x]
+  (and (set? x) (every? keyword? x)))
+
+(defn- keyword-map-to-keyword-set? [x]
+  (and (map? x) (every? keyword? (keys x)) (every? keyword-set? (vals x))))
+
+(defn- keyword-map-to-string? [x]
+  (and (map? x) (every? keyword? (keys x)) (every? non-empty-string? (vals x))))
+
+(defn- string-set? [x]
+  (and (set? x) (every? non-empty-string? x)))
 
 (defn validate-manifest
   "Validate a minimal component manifest EDN map.
@@ -296,37 +469,6 @@
 (defn policy-decision? [d]
   (:valid? (validate-policy-decision d)))
 
-(defn validate-policy
-  "Validate the pure policy shape shared by host adapters.
-
-  `:aiueos/signers` maps trusted signer ids to public-key material.
-  `:aiueos/signer-status` records lifecycle status for those same ids. Missing
-  status is treated by adapters as active for backward-compatible flat signer
-  registries; any explicit non-active status must not admit new artifacts."
-  [p]
-  (let [errors
-        (if-not (map? p)
-          [(err [] "policy must be a map")]
-          (collect-errors
-           (unknown-aiueos-key-errors p policy-keys)
-           (field-error p :aiueos/signers signer-map?
-                        ":aiueos/signers must be a map of signer keywords to public-key strings")
-           (field-error p :aiueos/signer-status signer-status-map?
-                        ":aiueos/signer-status must be a map of signer keywords to lifecycle keywords")
-           (field-error p :aiueos/require-signed boolean?
-                        ":aiueos/require-signed must be a boolean")
-           (when (and (signer-map? (:aiueos/signers p))
-                      (signer-status-map? (:aiueos/signer-status p)))
-             (let [unknown (sort (remove (set (keys (:aiueos/signers p)))
-                                         (keys (:aiueos/signer-status p))))]
-               (mapv #(err [:aiueos/signer-status %]
-                           "signer-status references unknown signer")
-                     unknown)))))]
-    (valid-result errors)))
-
-(defn policy? [p]
-  (:valid? (validate-policy p)))
-
 (defn validate-audit-event
   "Validate one append-only audit log event map."
   [e]
@@ -349,35 +491,387 @@
 (defn audit-event? [e]
   (:valid? (validate-audit-event e)))
 
-(defn validate-host-adapter
-  "Validate a host adapter declaration.
+(defn validate-system
+  "Validate an aiueos system graph descriptor.
 
-  Native execution is allowed only as an explicitly adapter-owned target that
-  consumes the CLJC/EDN authority contracts from this repository."
-  [adapter]
+  The graph owns component membership as EDN. Providers may resolve paths, but
+  the system identity and component manifest list are pure data."
+  [system]
   (let [errors
-        (if-not (map? adapter)
-          [(err [] "host adapter must be a map")]
+        (if-not (map? system)
+          [(err [] "system must be a map")]
           (collect-errors
-           (missing-errors adapter host-adapter-required-keys)
-           (unknown-aiueos-adapter-key-errors adapter host-adapter-keys)
-           (field-error adapter :aiueos.adapter/id keyword?
-                        ":aiueos.adapter/id must be a keyword")
-           (field-error adapter :aiueos.adapter/kind adapter-kinds
-                        ":aiueos.adapter/kind must be a known adapter kind")
-           (field-error adapter :aiueos.adapter/consumes kw-set?
-                        ":aiueos.adapter/consumes must be a keyword set")
-           (field-error adapter :aiueos.adapter/provides kw-set?
-                        ":aiueos.adapter/provides must be a keyword set")
-           (field-error adapter :aiueos.adapter/repository string?
-                        ":aiueos.adapter/repository must be a string")
-           (field-error adapter :aiueos.adapter/status keyword?
-                        ":aiueos.adapter/status must be a keyword")
-           (field-error adapter :aiueos.adapter/native? boolean?
-                        ":aiueos.adapter/native? must be a boolean")
-           (field-error adapter :aiueos.adapter/detail string?
-                        ":aiueos.adapter/detail must be a string")))]
+           (missing-errors system system-required-keys)
+           (unknown-aiueos-key-errors system system-keys)
+           (field-error system :aiueos/system component-id?
+                        ":aiueos/system must be a keyword or non-empty string")
+           (field-error system :aiueos/components string-vector?
+                        ":aiueos/components must be a vector of manifest paths")
+           (field-error system :aiueos/detail string?
+                        ":aiueos/detail must be a string")))]
     (valid-result errors)))
 
-(defn host-adapter? [adapter]
-  (:valid? (validate-host-adapter adapter)))
+(defn system? [system]
+  (:valid? (validate-system system)))
+
+(defn validate-deployment-policy
+  "Validate deployment policy overlays used by aiueos examples and providers.
+
+  The built-in policy contract owns core decision semantics. Deployment policy
+  data can add host kernel capabilities, per-component grants, surface scope,
+  network allow-lists, and signer catalogs without becoming runtime code."
+  [policy]
+  (let [errors
+        (if-not (map? policy)
+          [(err [] "deployment policy must be a map")]
+          (collect-errors
+           (unknown-aiueos-key-errors policy deployment-policy-keys)
+           (field-error policy :aiueos/policy component-id?
+                        ":aiueos/policy must be a keyword or non-empty string")
+           (field-error policy :aiueos/surface component-id?
+                        ":aiueos/surface must be a keyword or non-empty string")
+           (field-error policy :aiueos/kernel-caps keyword-set?
+                        ":aiueos/kernel-caps must be a keyword set")
+           (field-error policy :aiueos/grants keyword-map-to-keyword-set?
+                        ":aiueos/grants must map component keywords to capability sets")
+           (field-error policy :aiueos/forbid keyword-map-to-keyword-set?
+                        ":aiueos/forbid must map trust keywords to effect sets")
+           (field-error policy :aiueos/net-allow string-set?
+                        ":aiueos/net-allow must be a set of origin strings")
+           (field-error policy :aiueos/signers keyword-map-to-string?
+                        ":aiueos/signers must map signer keywords to public key strings")
+           (field-error policy :aiueos/require-signed boolean?
+                        ":aiueos/require-signed must be boolean")))]
+    (valid-result errors)))
+
+(defn deployment-policy? [policy]
+  (:valid? (validate-deployment-policy policy)))
+
+(defn- validate-component-port [direction p index]
+  (if-not (map? p)
+    [(err [direction index] "component port must be a map")]
+    (prefix-errors
+     [direction index]
+     (collect-errors
+      (missing-errors p component-port-required-keys)
+      (unknown-aiueos-key-errors p component-port-keys)
+      (field-error p :aiueos/name port-name?
+                   ":aiueos/name must be a keyword or non-empty string")
+      (field-error p :aiueos/direction component-directions
+                   ":aiueos/direction must be :import or :export")
+      (when (and (contains? p :aiueos/direction)
+                 (not= direction (:aiueos/direction p)))
+        (err [:aiueos/direction] "port direction does not match containing collection"))
+      (field-error p :aiueos/request component-id?
+                   ":aiueos/request must be a keyword or non-empty string")
+      (field-error p :aiueos/response component-id?
+                   ":aiueos/response must be a keyword or non-empty string")
+      (field-error p :aiueos/capability keyword?
+                   ":aiueos/capability must be a keyword")
+      (field-error p :aiueos/detail string?
+                   ":aiueos/detail must be a string")))))
+
+(defn validate-component-boundary
+  "Validate the kotoba source-of-truth shape for a Wasm Component Model boundary.
+
+  WIT may be generated from this data or checked against it, but WIT is not the
+  authority. Imports are host capabilities the provider must satisfy; exports
+  are component calls that consume and return kotoba contract data."
+  [boundary]
+  (let [errors
+        (if-not (map? boundary)
+          [(err [] "component boundary must be a map")]
+          (collect-errors
+           (missing-errors boundary component-boundary-required-keys)
+           (unknown-aiueos-key-errors boundary component-boundary-keys)
+           (field-error boundary :aiueos/world component-id?
+                        ":aiueos/world must be a keyword or non-empty string")
+           (field-error boundary :aiueos/imports vector?
+                        ":aiueos/imports must be a vector of component ports")
+           (field-error boundary :aiueos/exports vector?
+                        ":aiueos/exports must be a vector of component ports")
+           (field-error boundary :aiueos/contract component-id?
+                        ":aiueos/contract must be a keyword or non-empty string")
+           (field-error boundary :aiueos/wit string?
+                        ":aiueos/wit must be a string when present")
+           (field-error boundary :aiueos/adapter keyword?
+                        ":aiueos/adapter must be a keyword")
+           (field-error boundary :aiueos/contract #{:aiueos/authority}
+                        ":aiueos/contract must be :aiueos/authority")
+           (field-error boundary :aiueos/adapter #{:wasm-component-model}
+                        ":aiueos/adapter must be :wasm-component-model")
+           (when (vector? (:aiueos/imports boundary))
+             (mapcat #(validate-component-port :import %1 %2)
+                     (:aiueos/imports boundary)
+                     (range)))
+           (when (vector? (:aiueos/exports boundary))
+             (mapcat #(validate-component-port :export %1 %2)
+                     (:aiueos/exports boundary)
+                     (range)))
+           (let [import-names (set (map :aiueos/name (:aiueos/imports boundary)))
+                 export-names (set (map :aiueos/name (:aiueos/exports boundary)))]
+             (collect-errors
+              (when-not (set/subset? required-component-imports import-names)
+                (err [:aiueos/imports] "missing required host imports"))
+              (when-not (set/subset? required-component-exports export-names)
+                (err [:aiueos/exports] "missing required component exports"))))))]
+    (valid-result errors)))
+
+(defn component-boundary? [boundary]
+  (:valid? (validate-component-boundary boundary)))
+
+(defn validate-grant
+  "Validate the normalized Kotoba Grant shape used before materializing aiueos
+  local grants. External CACAO/UCAN/VC envelopes are not accepted here; host or
+  auth adapters must normalize them into this typed EDN shape first."
+  [grant]
+  (let [errors
+        (if-not (map? grant)
+          [(err [] "grant must be a map")]
+          (collect-errors
+           (missing-errors grant grant-required-keys)
+           (unknown-aiueos-key-errors grant grant-keys)
+           (field-error grant :aiueos/subject string-or-keyword?
+                        ":aiueos/subject must be a keyword or string")
+           (field-error grant :aiueos/audience string-or-keyword?
+                        ":aiueos/audience must be a keyword or string")
+           (field-error grant :aiueos/component component-id?
+                        ":aiueos/component must be a keyword or non-empty string")
+           (field-error grant :aiueos/capabilities kw-set?
+                        ":aiueos/capabilities must be a keyword set")
+           (field-error grant :aiueos/manifest-cid string?
+                        ":aiueos/manifest-cid must be a string")
+           (field-error grant :aiueos/wasm-cid string?
+                        ":aiueos/wasm-cid must be a string")
+           (field-error grant :aiueos/limits map?
+                        ":aiueos/limits must be a map")
+           (field-error grant :aiueos/not-before non-negative-integer?
+                        ":aiueos/not-before must be a non-negative integer")
+           (field-error grant :aiueos/expires-at non-negative-integer?
+                        ":aiueos/expires-at must be a non-negative integer")
+           (field-error grant :aiueos/parent string-or-keyword?
+                        ":aiueos/parent must be a keyword or string")
+           (field-error grant :aiueos/proof map?
+                        ":aiueos/proof must be a map")))]
+    (valid-result errors)))
+
+(defn grant? [grant]
+  (:valid? (validate-grant grant)))
+
+(defn validate-run-plan
+  "Validate the broker-produced plan consumed by a Wasm component provider.
+
+  A plan is pure data. It may name host imports and component boundaries, but it
+  does not execute anything and does not carry ambient host authority."
+  [plan]
+  (let [errors
+        (if-not (map? plan)
+          [(err [] "run plan must be a map")]
+          (collect-errors
+           (missing-errors plan run-plan-required-keys)
+           (unknown-aiueos-key-errors plan run-plan-keys)
+           (field-error plan :aiueos/component component-id?
+                        ":aiueos/component must be a keyword or non-empty string")
+           (when (contains? plan :aiueos/manifest)
+             (prefix-errors [:aiueos/manifest]
+                            (:errors (validate-manifest (:aiueos/manifest plan)))))
+           (when (contains? plan :aiueos/decision)
+             (prefix-errors [:aiueos/decision]
+                            (:errors (validate-policy-decision (:aiueos/decision plan)))))
+           (when (contains? plan :aiueos/grant)
+             (prefix-errors [:aiueos/grant]
+                            (:errors (validate-grant (:aiueos/grant plan)))))
+           (when (contains? plan :aiueos/component-boundary)
+             (prefix-errors [:aiueos/component-boundary]
+                            (:errors (validate-component-boundary (:aiueos/component-boundary plan)))))
+           (field-error plan :aiueos/entry string?
+                        ":aiueos/entry must be a string")
+           (field-error plan :aiueos/args int-vector?
+                        ":aiueos/args must be a vector of integers")
+           (field-error plan :aiueos/limits map?
+                        ":aiueos/limits must be a map")
+           (field-error plan :aiueos/imports kw-coll?
+                        ":aiueos/imports must be a keyword set or vector")
+           (field-error plan :aiueos/detail string?
+                        ":aiueos/detail must be a string")
+           (field-error plan :aiueos/audit-events vector?
+                        ":aiueos/audit-events must be a vector")
+           (when (vector? (:aiueos/audit-events plan))
+             (mapcat (fn [event index]
+                       (prefix-errors [:aiueos/audit-events index]
+                                      (:errors (validate-audit-event event))))
+                     (:aiueos/audit-events plan)
+                     (range)))))]
+    (valid-result errors)))
+
+(defn run-plan? [plan]
+  (:valid? (validate-run-plan plan)))
+
+(defn validate-run-receipt
+  "Validate the provider-produced receipt after executing or denying a run plan."
+  [receipt]
+  (let [errors
+        (if-not (map? receipt)
+          [(err [] "run receipt must be a map")]
+          (collect-errors
+           (missing-errors receipt run-receipt-required-keys)
+           (unknown-aiueos-key-errors receipt run-receipt-keys)
+           (field-error receipt :aiueos/component component-id?
+                        ":aiueos/component must be a keyword or non-empty string")
+           (field-error receipt :aiueos/status run-statuses
+                        ":aiueos/status must be a known run status")
+           (field-error receipt :aiueos/error string?
+                        ":aiueos/error must be a string")
+           (field-error receipt :aiueos/started-at non-negative-integer?
+                        ":aiueos/started-at must be a non-negative integer")
+           (field-error receipt :aiueos/finished-at non-negative-integer?
+                        ":aiueos/finished-at must be a non-negative integer")
+           (field-error receipt :aiueos/run-cid string?
+                        ":aiueos/run-cid must be a string")
+           (field-error receipt :aiueos/input-cid string?
+                        ":aiueos/input-cid must be a string")
+           (field-error receipt :aiueos/output-cid string?
+                        ":aiueos/output-cid must be a string")
+           (field-error receipt :aiueos/detail string?
+                        ":aiueos/detail must be a string")
+           (field-error receipt :aiueos/audit-events vector?
+                        ":aiueos/audit-events must be a vector")
+           (when (vector? (:aiueos/audit-events receipt))
+             (mapcat (fn [event index]
+                       (prefix-errors [:aiueos/audit-events index]
+                                      (:errors (validate-audit-event event))))
+                     (:aiueos/audit-events receipt)
+                     (range)))))]
+    (valid-result errors)))
+
+(defn run-receipt? [receipt]
+  (:valid? (validate-run-receipt receipt)))
+
+(defn validate-policy-contract
+  "Validate the EDN-owned aiueos policy tables.
+
+  Rust policy code may execute this decision model, but default capabilities,
+  forbiddances, decision labels, violation labels, and grant fields are owned
+  here as data."
+  [policy]
+  (let [errors
+        (if-not (map? policy)
+          [(err [] "policy contract must be a map")]
+          (collect-errors
+           (missing-errors policy policy-contract-required-keys)
+           (unknown-policy-key-errors policy policy-contract-keys)
+           (field-error policy :aiueos.policy/id #{:aiueos/default-policy}
+                        ":aiueos.policy/id must be :aiueos/default-policy")
+           (field-error policy :aiueos.policy/authority #{[:kotoba-clj :edn]}
+                        ":aiueos.policy/authority must be [:kotoba-clj :edn]")
+           (field-error policy :aiueos.policy/source-files string-vector?
+                        ":aiueos.policy/source-files must be a vector of strings")
+           (field-error policy :aiueos.policy/kernel-caps keyword-set?
+                        ":aiueos.policy/kernel-caps must be a keyword set")
+           (field-error policy :aiueos.policy/forbid keyword-map-to-keyword-set?
+                        ":aiueos.policy/forbid must map trust keywords to effect keyword sets")
+           (field-error policy :aiueos.policy/decision-shapes keyword-set?
+                        ":aiueos.policy/decision-shapes must be a keyword set")
+           (field-error policy :aiueos.policy/violation-kinds keyword-set?
+                        ":aiueos.policy/violation-kinds must be a keyword set")
+           (field-error policy :aiueos.policy/signer-statuses keyword-set?
+                        ":aiueos.policy/signer-statuses must be a keyword set")
+           (field-error policy :aiueos.policy/effects keyword-set?
+                        ":aiueos.policy/effects must be a keyword set")
+           (field-error policy :aiueos.policy/grant-fields keyword-vector?
+                        ":aiueos.policy/grant-fields must be a vector of keywords")
+           (when-not (= policy-decisions (:aiueos.policy/decision-shapes policy))
+             (err [:aiueos.policy/decision-shapes]
+                  "policy decision shapes must match the CLJC policy decision contract"))
+           (when-not (set/subset? violation-kinds (:aiueos.policy/violation-kinds policy))
+             (err [:aiueos.policy/violation-kinds]
+                  "policy violation kinds must cover the CLJC violation contract"))
+           (when-not (set/subset? #{:log/write :clock/monotonic :random/bytes}
+                                  (:aiueos.policy/kernel-caps policy))
+             (err [:aiueos.policy/kernel-caps]
+                  "kernel caps must include the default host primitives"))
+           (when-not (= grant-required-keys (set (:aiueos.policy/grant-fields policy)))
+             (err [:aiueos.policy/grant-fields]
+                  "grant fields must match the normalized grant required keys"))))]
+    (valid-result errors)))
+
+(defn policy-contract? [policy]
+  (:valid? (validate-policy-contract policy)))
+
+(defn- validate-broker-flow [flow index]
+  (if-not (map? flow)
+    [(err [:aiueos.broker/flows index] "broker flow must be a map")]
+    (prefix-errors
+     [:aiueos.broker/flows index]
+     (collect-errors
+      (missing-errors flow broker-flow-required-keys)
+      (unknown-broker-key-errors flow broker-flow-keys)
+      (field-error flow :aiueos.broker/name broker-flow-names
+                   ":aiueos.broker/name must be a known broker flow")
+      (field-error flow :aiueos.broker/input broker-inputs
+                   ":aiueos.broker/input must be a known broker input")
+      (field-error flow :aiueos.broker/output broker-outputs
+                   ":aiueos.broker/output must be a known broker output")
+      (field-error flow :aiueos.broker/steps keyword-vector?
+                   ":aiueos.broker/steps must be a vector of keywords")))))
+
+(defn validate-broker-contract
+  "Validate the EDN-owned aiueos broker flow.
+
+  The broker contract names pure-data flows. Provider runtimes may materialize
+  and execute them, but admission/run-plan/receipt semantics stay in CLJC/EDN."
+  [broker]
+  (let [errors
+        (if-not (map? broker)
+          [(err [] "broker contract must be a map")]
+          (collect-errors
+           (missing-errors broker broker-contract-required-keys)
+           (unknown-broker-key-errors broker broker-contract-keys)
+           (field-error broker :aiueos.broker/id #{:aiueos/capability-broker}
+                        ":aiueos.broker/id must be :aiueos/capability-broker")
+           (field-error broker :aiueos.broker/authority #{[:kotoba-clj :edn]}
+                        ":aiueos.broker/authority must be [:kotoba-clj :edn]")
+           (field-error broker :aiueos.broker/source-files string-vector?
+                        ":aiueos.broker/source-files must be a vector of strings")
+           (field-error broker :aiueos.broker/policy #{:aiueos/default-policy}
+                        ":aiueos.broker/policy must be :aiueos/default-policy")
+           (field-error broker :aiueos.broker/component-boundary #{:aiueos/component}
+                        ":aiueos.broker/component-boundary must be :aiueos/component")
+           (field-error broker :aiueos.broker/flows vector?
+                        ":aiueos.broker/flows must be a vector")
+           (field-error broker :aiueos.broker/audit-events keyword-set?
+                        ":aiueos.broker/audit-events must be a keyword set")
+           (field-error broker :aiueos.broker/run-statuses keyword-set?
+                        ":aiueos.broker/run-statuses must be a keyword set")
+           (when (vector? (:aiueos.broker/flows broker))
+             (let [flows (:aiueos.broker/flows broker)
+                   names (set (map :aiueos.broker/name flows))]
+               (collect-errors
+                (mapcat validate-broker-flow flows (range))
+                (when-not (= broker-flow-names names)
+                  (err [:aiueos.broker/flows]
+                       "broker flows must cover verify-system, verify-one, run-plan, and run-receipt")))))
+           (when-not (set/subset? audit-events (:aiueos.broker/audit-events broker))
+             (err [:aiueos.broker/audit-events]
+                  "broker audit events must cover the CLJC audit event contract"))
+           (when-not (= run-statuses (:aiueos.broker/run-statuses broker))
+             (err [:aiueos.broker/run-statuses]
+                  "broker run statuses must match the CLJC run receipt contract"))))]
+    (valid-result errors)))
+
+(defn broker-contract? [broker]
+  (:valid? (validate-broker-contract broker)))
+
+#?(:clj
+   (defn validate-aiueos-provider-files [contracts provider-root]
+     (let [root (io/file provider-root)
+           exists? (fn [path] (.exists (io/file root path)))
+           errors
+           (apply collect-errors
+                  (for [[contract-index contract] (map-indexed vector contracts)
+                        source (or (:aiueos.policy/source-files contract)
+                                   (:aiueos.broker/source-files contract))]
+                    (when-not (exists? source)
+                      (err [:contract contract-index :source-files source]
+                           "aiueos provider source file is missing"))))]
+       (valid-result errors))))

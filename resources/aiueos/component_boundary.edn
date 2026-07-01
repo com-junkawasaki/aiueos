@@ -1,0 +1,47 @@
+{:aiueos/world :aiueos/component
+ :aiueos/contract :aiueos/authority
+ :aiueos/adapter :wasm-component-model
+ :aiueos/wit "generated-or-checked-from-edn"
+ :aiueos/imports
+ [{:aiueos/name :host/wasm-runner
+   :aiueos/direction :import
+   :aiueos/capability :host/execute
+   :aiueos/request :aiueos/run-plan
+   :aiueos/response :aiueos/run-receipt}
+  {:aiueos/name :host/filesystem
+   :aiueos/direction :import
+   :aiueos/capability :fs/read
+   :aiueos/request :aiueos/manifest
+   :aiueos/response :aiueos/manifest}
+  {:aiueos/name :host/process
+   :aiueos/direction :import
+   :aiueos/capability :process/spawn
+   :aiueos/request :aiueos/run-plan
+   :aiueos/response :aiueos/run-receipt}
+  {:aiueos/name :host/device
+   :aiueos/direction :import
+   :aiueos/capability :device/io
+   :aiueos/request :aiueos/run-plan
+   :aiueos/response :aiueos/run-receipt}
+  {:aiueos/name :host/audit-sink
+   :aiueos/direction :import
+   :aiueos/capability :audit/write
+   :aiueos/request :aiueos/audit-event
+   :aiueos/response :aiueos/audit-receipt}]
+ :aiueos/exports
+ [{:aiueos/name :aiueos/verify
+   :aiueos/direction :export
+   :aiueos/request :aiueos/manifest
+   :aiueos/response :aiueos/policy-decision}
+  {:aiueos/name :aiueos/inspect
+   :aiueos/direction :export
+   :aiueos/request :aiueos/manifest
+   :aiueos/response :aiueos/component-boundary}
+  {:aiueos/name :aiueos/admit
+   :aiueos/direction :export
+   :aiueos/request :aiueos/manifest
+   :aiueos/response :aiueos/policy-decision}
+  {:aiueos/name :aiueos/run-plan
+   :aiueos/direction :export
+   :aiueos/request :aiueos/manifest
+   :aiueos/response :aiueos/run-plan}]}

@@ -1,0 +1,38 @@
+#:aiueos.broker{:id :aiueos/capability-broker,
+                :authority [:kotoba-clj :edn],
+                :source-files [],
+                :policy :aiueos/default-policy,
+                :component-boundary :aiueos/component,
+                :flows
+                [#:aiueos.broker{:name :verify-system,
+                                 :input :aiueos/system,
+                                 :output :aiueos/policy-decision,
+                                 :steps
+                                 [:graph/build
+                                  :component/verify-each
+                                  :audit/grant-or-deny
+                                  :violations/aggregate]}
+                 #:aiueos.broker{:name :verify-one,
+                                 :input :aiueos/manifest,
+                                 :output :aiueos/policy-decision,
+                                 :steps
+                                 [:signature/authenticate
+                                  :trust/elevate-verified
+                                  :policy/evaluate
+                                  :audit/grant-or-deny]}
+                 #:aiueos.broker{:name :run-plan,
+                                 :input :aiueos/manifest,
+                                 :output :aiueos/run-plan,
+                                 :steps
+                                 [:policy/evaluate
+                                  :grant/normalize
+                                  :component-boundary/attach
+                                  :audit/plan]}
+                 #:aiueos.broker{:name :run-receipt,
+                                 :input :aiueos/run-plan,
+                                 :output :aiueos/run-receipt,
+                                 :steps
+                                 [:provider/execute :audit/receipt]}],
+                :audit-events #{:run :reject :deny :compile :grant},
+                :run-statuses
+                #{:started :planned :denied :failed :succeeded}}

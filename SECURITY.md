@@ -81,12 +81,13 @@ refuses to provide what that surface shouldn't.
 - **The TCB itself.** A bug in wasmtime, the host adapters, or the broker is
   game over. The TCB is small by design, but it is trusted, not verified — there
   is no formal proof yet.
-- **Signing key lifecycle is contract-level.** The CLJC authority contract now
-  validates `:aiueos/signer-status` lifecycle entries against
-  `:aiueos/signers`, including revoked, expired, compromised, suspended, retired
-  and active states. Host adapters must enforce non-active statuses for new
-  artifact admission; certificate chains / delegation and CID-addressed
-  supply-chain integrity are still future work.
+- **Signing key lifecycle (rotation / revocation / expiry / chains).** Manifest
+  *authenticity* now exists — ed25519 signatures over the identity↔artifact
+  binding, verified against a trusted-signer registry (defense layer 9). What is
+  *not* yet present is the key **lifecycle**: the registry is a flat list with no
+  expiry, no revocation, and no certificate chains / delegation. A compromised
+  signer key can only be handled by editing the policy. CID-addressed
+  supply-chain integrity is also still future work.
 - **Preemptive / hard real-time scheduling.** Per-cycle **IO quotas** now bound
   host-call rate (`:aiueos/quota {:host-calls N :publishes N}` — an over-budget
   call traps like any other), and a **deterministic cooperative scheduler**
@@ -114,14 +115,6 @@ refuses to provide what that surface shouldn't.
 If a deployment needs any of the above, it must add it above aiueos — the design
 makes room for these (signing hooks, per-surface providers, scheduler) but
 Phase-0 does not ship them.
-
-## Deployment profiles
-
-Security claims are deployment-profile specific. The default profile is
-`research`: capability containment, contract validation, and audit shapes, with
-no FIPS, side-channel, hard-real-time, or formal-verification claim.
-
-Profile definitions live in [`docs/deployment-profiles.md`](docs/deployment-profiles.md).
 
 ## Reporting
 

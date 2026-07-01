@@ -1,6 +1,13 @@
-{:paths ["src" "test"]
+{:paths ["src" "resources" "test"]
  :tasks
- {
+ {test
+  {:doc "Run the pure CLJC authority contract tests."
+   :task (do
+           (require 'aiueos.contract-test)
+           (clojure.test/run-tests 'aiueos.contract-test))}
+
   test:cljc
   {:doc "Run the pure CLJC authority contract tests."
-   :task (shell "clojure" "-M:test")}}}
+   :task (do
+           (require 'aiueos.contract-test)
+           (clojure.test/run-tests 'aiueos.contract-test))}}}

@@ -1,0 +1,42 @@
+#:aiueos.policy{:source-files [],
+                :grant-fields
+                [:aiueos/subject
+                 :aiueos/audience
+                 :aiueos/component
+                 :aiueos/capabilities],
+                :kernel-caps
+                #{:dma/map
+                  :topic/subscribe
+                  :random/bytes
+                  :topic/publish
+                  :irq/subscribe
+                  :log/write
+                  :clock/monotonic
+                  :mmio/map
+                  :pci/config},
+                :forbid
+                {:ai-generated #{:secrets :network :persistent-write},
+                 :untrusted #{:secrets}},
+                :signer-statuses
+                #{:retired
+                  :revoked
+                  :compromised
+                  :suspended
+                  :active
+                  :expired},
+                :authority [:kotoba-clj :edn],
+                :effects
+                #{:process-spawn
+                  :secrets
+                  :storage
+                  :device-io
+                  :network
+                  :persistent-write},
+                :id :aiueos/default-policy,
+                :decision-shapes #{:deny :grant},
+                :violation-kinds
+                #{:bad-signature
+                  :surface-mismatch
+                  :unresolved-capability
+                  :forbidden-effect
+                  :dma-without-iommu}}

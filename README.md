@@ -20,6 +20,8 @@ The authority layer is deliberately data-only:
 
 - component identity, kind, trust, entry, args, imports, exports, effects, and limits
 - grant or deny policy decisions with explicit violation shapes
+- signer lifecycle policy contracts for revocation, expiry, and signed-admission
+  requirements
 - append-only audit events that can be emitted by authority or host adapters
 - EDN fixtures for systems, browser surfaces, robotics, computer-use, and policy examples
 - explicit host adapter declarations for native execution, VM boot, browser
@@ -33,6 +35,9 @@ The authority layer is deliberately data-only:
 | `test/aiueos/contract_test.cljc` | conformance tests for the contract |
 | `examples/` | EDN/WAT fixtures consumed by adapters and docs |
 | `docs/` | architecture notes and migration status |
+
+Deployment security claim profiles are tracked in
+[`docs/deployment-profiles.md`](docs/deployment-profiles.md).
 
 ## Development
 

@@ -15,6 +15,9 @@
 (def policy-decisions
   #{:grant :deny})
 
+(def signer-statuses
+  #{:active :retired :revoked :expired :compromised :suspended})
+
 (def violation-kinds
   #{:unresolved-capability
     :forbidden-effect
@@ -64,6 +67,14 @@
 
 (def policy-decision-keys
   (set/union policy-decision-required-keys policy-decision-optional-keys))
+
+(def policy-optional-keys
+  #{:aiueos/signers
+    :aiueos/signer-status
+    :aiueos/require-signed})
+
+(def policy-keys
+  policy-optional-keys)
 
 (def audit-event-required-keys
   #{:aiueos/ts :aiueos/event :aiueos/component :aiueos/detail})
@@ -132,6 +143,16 @@
 (defn- field-error [m k pred message]
   (when (and (contains? m k) (not (pred (get m k))))
     (err [k] message)))
+
+(defn- signer-map? [x]
+  (and (map? x)
+       (every? keyword? (keys x))
+       (every? string? (vals x))))
+
+(defn- signer-status-map? [x]
+  (and (map? x)
+       (every? keyword? (keys x))
+       (every? signer-statuses (vals x))))
 
 (defn- collect-errors [& xs]
   (vec (remove nil? (mapcat #(if (sequential? %) % [%]) xs))))
@@ -274,6 +295,37 @@
 
 (defn policy-decision? [d]
   (:valid? (validate-policy-decision d)))
+
+(defn validate-policy
+  "Validate the pure policy shape shared by host adapters.
+
+  `:aiueos/signers` maps trusted signer ids to public-key material.
+  `:aiueos/signer-status` records lifecycle status for those same ids. Missing
+  status is treated by adapters as active for backward-compatible flat signer
+  registries; any explicit non-active status must not admit new artifacts."
+  [p]
+  (let [errors
+        (if-not (map? p)
+          [(err [] "policy must be a map")]
+          (collect-errors
+           (unknown-aiueos-key-errors p policy-keys)
+           (field-error p :aiueos/signers signer-map?
+                        ":aiueos/signers must be a map of signer keywords to public-key strings")
+           (field-error p :aiueos/signer-status signer-status-map?
+                        ":aiueos/signer-status must be a map of signer keywords to lifecycle keywords")
+           (field-error p :aiueos/require-signed boolean?
+                        ":aiueos/require-signed must be a boolean")
+           (when (and (signer-map? (:aiueos/signers p))
+                      (signer-status-map? (:aiueos/signer-status p)))
+             (let [unknown (sort (remove (set (keys (:aiueos/signers p)))
+                                         (keys (:aiueos/signer-status p))))]
+               (mapv #(err [:aiueos/signer-status %]
+                           "signer-status references unknown signer")
+                     unknown)))))]
+    (valid-result errors)))
+
+(defn policy? [p]
+  (:valid? (validate-policy p)))
 
 (defn validate-audit-event
   "Validate one append-only audit log event map."

@@ -49,6 +49,31 @@
       (is (false? (:valid? result)))
       (is (some #(= [:aiueos/capabilities] (:path %)) (:errors result))))))
 
+(deftest policy-contract
+  (testing "validates signer lifecycle policy"
+    (is (contract/policy?
+         {:aiueos/signers {:alice "ed25519-pubkey" :bob "old-pubkey"}
+          :aiueos/signer-status {:alice :active :bob :revoked}
+          :aiueos/require-signed true})))
+  (testing "accepts flat signer registries for backward compatibility"
+    (is (contract/policy?
+         {:aiueos/signers {:alice "ed25519-pubkey"}})))
+  (testing "rejects malformed signer lifecycle policy"
+    (let [result (contract/validate-policy
+                  {:aiueos/signers {:alice "ed25519-pubkey"}
+                   :aiueos/signer-status {:bob :revoked
+                                           :mallory :unknown}
+                   :aiueos/require-signed :yes})]
+      (is (false? (:valid? result)))
+      (is (some #(= [:aiueos/signer-status] (:path %)) (:errors result)))
+      (is (some #(= [:aiueos/require-signed] (:path %)) (:errors result)))))
+  (testing "rejects lifecycle entries for unknown signers"
+    (let [result (contract/validate-policy
+                  {:aiueos/signers {:alice "ed25519-pubkey"}
+                   :aiueos/signer-status {:bob :revoked}})]
+      (is (false? (:valid? result)))
+      (is (some #(= [:aiueos/signer-status :bob] (:path %)) (:errors result))))))
+
 (deftest audit-event-contract
   (testing "validates audit events emitted by authority or host adapters"
     (is (contract/audit-event?

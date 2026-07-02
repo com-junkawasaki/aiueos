@@ -24,6 +24,9 @@ contracts as adapters/providers elsewhere, but they are not authority here.
   stays a native host-adapter concern (ADR-2607022200 Layer 3) — never ported here.
 - `src/aiueos/cli.cljc` is the CLJC authority for the aiueos CLI command contract
   (mirrors `kotoba-lang/kotoba-lang`'s `kotoba.cli` pattern).
+- `src/aiueos/decide.cljc` is the decision subprocess bridge (ADR-2607022700): a
+  native host adapter shells out to this instead of ever computing capability
+  decisions itself (`bb decide`, newline-delimited EDN over stdio).
 - `resources/aiueos/component_boundary.edn` owns the component imports/exports.
 - `resources/aiueos/policy_contract.edn` / `broker_contract.edn` own the policy/broker decision tables.
 - `resources/aiueos/cli.edn` owns the CLI command/option contract.

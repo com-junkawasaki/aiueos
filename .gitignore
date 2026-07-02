@@ -1,4 +1,7 @@
-# audit logs written by host adapters that consume the CLJC contracts.
+/target
+/.cpcache/
+# audit logs written by host adapters that consume the CLJC contracts
+# (e.g. `aiueos run/verify` in the retired Rust CLI, or a future native adapter).
 .aiueos/
 **/.aiueos/
 *.wasm
